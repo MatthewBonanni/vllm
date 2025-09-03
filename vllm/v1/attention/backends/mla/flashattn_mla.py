@@ -6,8 +6,10 @@ from typing import ClassVar, Optional
 
 import torch
 
-from vllm.attention.backends.abstract import AttentionLayer, AttentionType
-from vllm.attention.utils.fa_utils import (flash_attn_supports_mla,
+from vllm.attention.backends.abstract import (AttentionLayer, AttentionType,
+                                              is_quantized_kv_cache)
+from vllm.attention.utils.fa_utils import (flash_attn_supports_fp8,
+                                           flash_attn_supports_mla,
                                            get_flash_attn_version)
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
@@ -147,6 +149,14 @@ class FlashAttnMLAImpl(MLACommonImpl[FlashAttnMLAMetadata]):
                                       "are not implemented for "
                                       "FlashAttnMLAImpl")
 
+        if is_quantized_kv_cache(self.kv_cache_dtype) and (
+                not self.kv_cache_dtype.startswith("fp8")
+                or not flash_attn_supports_fp8()):
+            raise NotImplementedError(
+                f"FlashAttention does not support {self.kv_cache_dtype} "
+                "kv-cache on this device "
+                f"(FA supports fp8 = {flash_attn_supports_fp8()}).")
+
     def _forward_decode(
         self,
         q_nope: torch.Tensor,
@@ -157,6 +167,14 @@ class FlashAttnMLAImpl(MLACommonImpl[FlashAttnMLAMetadata]):
     ) -> torch.Tensor:
         assert kv_c_and_k_pe_cache.numel() > 0
         assert attn_metadata.decode is not None
+
+        if is_quantized_kv_cache(self.kv_cache_dtype) and (
+                not self.kv_cache_dtype.startswith("fp8")
+                or not flash_attn_supports_fp8()):
+            raise NotImplementedError(
+                f"FlashAttention does not support {self.kv_cache_dtype} "
+                "kv-cache on this device "
+                f"(FA supports fp8 = {flash_attn_supports_fp8()}).")
 
         kv_c_cache = kv_c_and_k_pe_cache[..., :self.kv_lora_rank]
         k_pe_cache = kv_c_and_k_pe_cache[..., self.kv_lora_rank:]
