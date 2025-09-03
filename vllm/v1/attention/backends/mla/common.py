@@ -438,7 +438,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         self.device = device
         scheduler_config = vllm_config.scheduler_config
         self.model_config = vllm_config.model_config
-        cache_config = vllm_config.cache_config
+        self.cache_config = vllm_config.cache_config
         parallel_config = vllm_config.parallel_config
         self.num_heads = self.model_config.get_num_attention_heads(
             parallel_config)
@@ -452,8 +452,9 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         self.chunked_prefill_workspace_size = min(
             # Max sure there is enough for 8 full length request or at least
             # 4 pages of cache per request
-            max(8 * self.model_config.max_model_len,
-                4 * scheduler_config.max_num_seqs * cache_config.block_size),
+            max(
+                8 * self.model_config.max_model_len, 4 *
+                scheduler_config.max_num_seqs * self.cache_config.block_size),
             # For long-context models try not to over-allocate limiting
             # kv-cache space, limiting it to 64k tokens,
             # which would result in the workspace being:
@@ -464,7 +465,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
             # (assuming 192 QK head dim, 128 heads, and fp16)
             128 * 1024)
         assert self.chunked_prefill_workspace_size >= \
-            scheduler_config.max_num_seqs * cache_config.block_size
+            scheduler_config.max_num_seqs * self.cache_config.block_size
         self.chunked_prefill_workspace = torch.empty(
             (self.chunked_prefill_workspace_size,
              self.model_config.get_head_size()),

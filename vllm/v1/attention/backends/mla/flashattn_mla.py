@@ -42,6 +42,13 @@ class FlashAttnMLABackend(MLACommonBackend):
     def get_impl_cls() -> type["FlashAttnMLAImpl"]:
         return FlashAttnMLAImpl
 
+    @staticmethod
+    def get_fp8_dtype_for_flashattn(kv_cache_dtype: str) -> torch.dtype:
+        if kv_cache_dtype in ("fp8", "fp8_e4m3"):
+            return torch.float8_e4m3fn
+        else:
+            raise ValueError(f"Unrecognized FP8 dtype: {kv_cache_dtype}")
+
 
 @dataclass
 class FlashAttnMLADecodeMetadata(MLACommonDecodeMetadata):
@@ -69,6 +76,13 @@ class FlashAttnMLAMetadataBuilder(
     def _schedule_decode(self, num_reqs, cu_query_lens, max_query_len, seqlens,
                          max_seq_len, causal):
         if self.fa_aot_schedule:
+            cache_dtype = self.cache_config.cache_dtype
+            if cache_dtype.startswith("fp8"):
+                qkv_dtype = FlashAttnMLABackend.get_fp8_dtype_for_flashattn(
+                    cache_dtype)
+            else:
+                qkv_dtype = self.kv_cache_spec.dtype
+            print("DEBUG DEBUG DEBUG: qkv_dtype", qkv_dtype)
             return get_scheduler_metadata(
                 batch_size=num_reqs,
                 max_seqlen_q=max_query_len,
@@ -77,7 +91,7 @@ class FlashAttnMLAMetadataBuilder(
                 num_heads_kv=1,
                 headdim=self.mla_dims.qk_rope_head_dim,
                 cache_seqlens=seqlens,
-                qkv_dtype=self.kv_cache_spec.dtype,
+                qkv_dtype=qkv_dtype,
                 headdim_v=self.mla_dims.kv_lora_rank,
                 page_size=self.page_size,
                 cu_seqlens_q=cu_query_lens,
@@ -149,13 +163,10 @@ class FlashAttnMLAImpl(MLACommonImpl[FlashAttnMLAMetadata]):
                                       "are not implemented for "
                                       "FlashAttnMLAImpl")
 
-        if is_quantized_kv_cache(self.kv_cache_dtype) and (
-                not self.kv_cache_dtype.startswith("fp8")
-                or not flash_attn_supports_fp8()):
+        if is_quantized_kv_cache(self.kv_cache_dtype) \
+            and not flash_attn_supports_fp8():
             raise NotImplementedError(
-                f"FlashAttention does not support {self.kv_cache_dtype} "
-                "kv-cache on this device "
-                f"(FA supports fp8 = {flash_attn_supports_fp8()}).")
+                "FlashAttention does not support fp8 kv-cache on this device.")
 
     def _forward_decode(
         self,
@@ -167,14 +178,6 @@ class FlashAttnMLAImpl(MLACommonImpl[FlashAttnMLAMetadata]):
     ) -> torch.Tensor:
         assert kv_c_and_k_pe_cache.numel() > 0
         assert attn_metadata.decode is not None
-
-        if is_quantized_kv_cache(self.kv_cache_dtype) and (
-                not self.kv_cache_dtype.startswith("fp8")
-                or not flash_attn_supports_fp8()):
-            raise NotImplementedError(
-                f"FlashAttention does not support {self.kv_cache_dtype} "
-                "kv-cache on this device "
-                f"(FA supports fp8 = {flash_attn_supports_fp8()}).")
 
         kv_c_cache = kv_c_and_k_pe_cache[..., :self.kv_lora_rank]
         k_pe_cache = kv_c_and_k_pe_cache[..., self.kv_lora_rank:]
