@@ -512,8 +512,8 @@ class CudaPlatformBase(Platform):
                 else:
                     attention_backend = "FLASHMLA"
 
-            # Only FlashMLA supports fp8
-            if attention_backend == "FLASHMLA":
+            # Only FlashMLA and FlashAttention MLA support fp8
+            if attention_backend in ["FLASHMLA", "FLASH_ATTN_MLA"]:
                 supported = True
             else:
                 supported = (not fp8_attention)
