@@ -435,12 +435,9 @@ M = TypeVar("M", bound=MLACommonMetadata)
 A = TypeVar("A")
 
 
-def use_flashinfer_prefill() -> bool:
+def use_flashinfer_prefill(vllm_config: VllmConfig) -> bool:
     # For blackwell default to flashinfer prefill if it's available since
     # it is faster than FA2.
-    from vllm.config import get_current_vllm_config
-
-    vllm_config = get_current_vllm_config()
     return (
         not vllm_config.attention_config.disable_flashinfer_prefill
         and flashinfer_available
@@ -450,10 +447,7 @@ def use_flashinfer_prefill() -> bool:
     )
 
 
-def use_cudnn_prefill() -> bool:
-    from vllm.config import get_current_vllm_config
-
-    vllm_config = get_current_vllm_config()
+def use_cudnn_prefill(vllm_config: VllmConfig) -> bool:
     return (
         flashinfer_available
         and vllm_config.attention_config.use_cudnn_prefill
@@ -462,11 +456,8 @@ def use_cudnn_prefill() -> bool:
     )
 
 
-def use_trtllm_ragged_deepseek_prefill() -> bool:
+def use_trtllm_ragged_deepseek_prefill(vllm_config: VllmConfig) -> bool:
     """Check if TRT-LLM ragged DeepSeek prefill should be used."""
-    from vllm.config import get_current_vllm_config
-
-    vllm_config = get_current_vllm_config()
     return (
         flashinfer_available
         and vllm_config.attention_config.use_trtllm_ragged_deepseek_prefill
@@ -592,9 +583,11 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
                 device=device,
             )
 
-        self._use_cudnn_prefill = use_cudnn_prefill()
-        self._use_fi_prefill = use_flashinfer_prefill()
-        self._use_trtllm_ragged_prefill = use_trtllm_ragged_deepseek_prefill()
+        self._use_cudnn_prefill = use_cudnn_prefill(vllm_config)
+        self._use_fi_prefill = use_flashinfer_prefill(vllm_config)
+        self._use_trtllm_ragged_prefill = use_trtllm_ragged_deepseek_prefill(
+            vllm_config
+        )
         self.prefill_metadata_cls = (
             FlashInferPrefillMetadata
             if self._use_fi_prefill
@@ -1279,19 +1272,21 @@ class MLACommonImpl(MLACommonBaseImpl[M], Generic[M]):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        if use_flashinfer_prefill():
+        vllm_config = get_current_vllm_config()
+
+        if use_flashinfer_prefill(vllm_config):
             logger.debug_once("Using FlashInfer prefill for MLA")
             self._run_prefill_context_chunk = self._run_prefill_context_chunk_fi
             self._run_prefill_new_tokens = self._run_prefill_new_tokens_fi
             self._pad_v = False
-        elif use_trtllm_ragged_deepseek_prefill():
+        elif use_trtllm_ragged_deepseek_prefill(vllm_config):
             logger.debug_once("Using TRT-LLM ragged DeepSeek prefill for MLA")
             self._run_prefill_context_chunk = (
                 self._run_prefill_context_chunk_trtllm_ragged
             )
             self._run_prefill_new_tokens = self._run_prefill_new_tokens_trtllm_ragged
             self._pad_v = False
-        elif use_cudnn_prefill():
+        elif use_cudnn_prefill(vllm_config):
             logger.debug_once("Using CUDNN prefill for MLA")
             self._run_prefill_context_chunk = self._run_prefill_context_chunk_cudnn
             self._run_prefill_new_tokens = self._run_prefill_new_tokens_cudnn
@@ -1325,11 +1320,11 @@ class MLACommonImpl(MLACommonBaseImpl[M], Generic[M]):
 
         self.chunked_prefill_workspace_size = (
             MLACommonMetadataBuilder.determine_chunked_prefill_workspace_size(
-                get_current_vllm_config()
+                vllm_config
             )
         )
         self.cp_kv_cache_interleave_size: int = (
-            get_current_vllm_config().parallel_config.cp_kv_cache_interleave_size
+            vllm_config.parallel_config.cp_kv_cache_interleave_size
         )
 
     def _flash_attn_varlen_diff_headdims(
