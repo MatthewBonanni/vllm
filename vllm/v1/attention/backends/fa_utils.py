@@ -9,47 +9,78 @@ from vllm.platforms import current_platform
 logger = init_logger(__name__)
 
 # Track whether upstream flash-attn is available on ROCm.
-# Set during module initialization and never modified afterwards.
-# This module-level flag avoids repeated import attempts and ensures
-# consistent behavior (similar to IS_AITER_FOUND in _aiter_ops.py).
+# Set lazily during _load_fa_ops and never modified afterwards.
 _ROCM_FLASH_ATTN_AVAILABLE = False
 
-if current_platform.is_cuda():
-    from vllm._custom_ops import reshape_and_cache_flash
-    from vllm.vllm_flash_attn import (  # type: ignore[attr-defined]
-        flash_attn_varlen_func,
-        get_scheduler_metadata,
-    )
+# Lazy-load C extension symbols to avoid initializing CUDA at import time.
+# The actual imports are deferred to first access via module __getattr__.
+_fa_ops_loaded = False
 
-elif current_platform.is_xpu():
-    from vllm import _custom_ops as ops
-    from vllm._xpu_ops import xpu_ops
 
-    reshape_and_cache_flash = ops.reshape_and_cache_flash
-    flash_attn_varlen_func = xpu_ops.flash_attn_varlen_func  # type: ignore[assignment]
-    get_scheduler_metadata = xpu_ops.get_scheduler_metadata  # type: ignore[assignment]
-elif current_platform.is_rocm():
-    try:
-        from flash_attn import flash_attn_varlen_func  # type: ignore[no-redef]
+def _load_fa_ops() -> None:
+    global _fa_ops_loaded, _ROCM_FLASH_ATTN_AVAILABLE
+    if _fa_ops_loaded:
+        return
+    _fa_ops_loaded = True
 
-        # Mark that upstream flash-attn is available on ROCm
-        _ROCM_FLASH_ATTN_AVAILABLE = True
-    except ImportError:
+    if current_platform.is_cuda():
+        from vllm._custom_ops import reshape_and_cache_flash
+        from vllm.vllm_flash_attn import (  # type: ignore[attr-defined]
+            flash_attn_varlen_func,
+            get_scheduler_metadata,
+        )
 
-        def flash_attn_varlen_func(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef,misc]
-            raise ImportError(
-                "ROCm platform requires upstream flash-attn "
-                "to be installed. Please install flash-attn first."
+        globals()["reshape_and_cache_flash"] = reshape_and_cache_flash
+        globals()["flash_attn_varlen_func"] = flash_attn_varlen_func
+        globals()["get_scheduler_metadata"] = get_scheduler_metadata
+
+    elif current_platform.is_xpu():
+        from vllm import _custom_ops as ops
+        from vllm._xpu_ops import xpu_ops
+
+        globals()["reshape_and_cache_flash"] = ops.reshape_and_cache_flash
+        globals()["flash_attn_varlen_func"] = xpu_ops.flash_attn_varlen_func
+        globals()["get_scheduler_metadata"] = xpu_ops.get_scheduler_metadata
+
+    elif current_platform.is_rocm():
+        try:
+            from flash_attn import (
+                flash_attn_varlen_func,  # type: ignore[no-redef]
             )
 
-    # ROCm doesn't use scheduler metadata (FA3 feature), provide stub
-    def get_scheduler_metadata(*args: Any, **kwargs: Any) -> None:  # type: ignore[misc]
-        return None
+            _ROCM_FLASH_ATTN_AVAILABLE = True
+            globals()["flash_attn_varlen_func"] = flash_attn_varlen_func
+        except ImportError:
 
-    # ROCm uses the C++ custom op for reshape_and_cache
-    from vllm import _custom_ops as ops
+            def _flash_attn_varlen_func_stub(*args: Any, **kwargs: Any) -> Any:
+                raise ImportError(
+                    "ROCm platform requires upstream flash-attn "
+                    "to be installed. Please install flash-attn first."
+                )
 
-    reshape_and_cache_flash = ops.reshape_and_cache_flash
+            globals()["flash_attn_varlen_func"] = _flash_attn_varlen_func_stub
+
+        def _get_scheduler_metadata_stub(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        globals()["get_scheduler_metadata"] = _get_scheduler_metadata_stub
+
+        from vllm import _custom_ops as ops
+
+        globals()["reshape_and_cache_flash"] = ops.reshape_and_cache_flash
+
+
+_LAZY_FA_OPS = frozenset(
+    {"reshape_and_cache_flash", "flash_attn_varlen_func", "get_scheduler_metadata"}
+)
+
+
+def __getattr__(name: str):
+    if name in _LAZY_FA_OPS:
+        _load_fa_ops()
+        if name in globals():
+            return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def get_flash_attn_version(requires_alibi: bool = False) -> int | None:

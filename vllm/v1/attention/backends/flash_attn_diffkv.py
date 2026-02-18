@@ -4,16 +4,13 @@
 
 import torch
 
+from vllm.logger import init_logger
 from vllm.v1.attention.backend import AttentionType
-from vllm.v1.attention.backends.fa_utils import is_flash_attn_varlen_func_available
+from vllm.v1.attention.backends import fa_utils as _fa_utils
+from vllm.v1.attention.backends.utils import get_kv_cache_layout
 from vllm.v1.attention.ops.triton_reshape_and_cache_flash import (
     triton_reshape_and_cache_flash_diffkv,
 )
-
-if is_flash_attn_varlen_func_available():
-    from vllm.v1.attention.backends.fa_utils import flash_attn_varlen_func
-from vllm.logger import init_logger
-from vllm.v1.attention.backends.utils import get_kv_cache_layout
 
 from .flash_attn import (
     FlashAttentionBackend,
@@ -222,7 +219,7 @@ class FlashAttentionDiffKVImpl(FlashAttentionImpl):
                     if self.sliding_window is not None
                     else None
                 )
-                flash_attn_varlen_func(
+                _fa_utils.flash_attn_varlen_func(
                     q=query[:num_actual_tokens],
                     k=key_cache,
                     v=value_cache,

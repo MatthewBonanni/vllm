@@ -2,20 +2,13 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Attention layer with FlashInfer."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 import torch
-from flashinfer import (
-    BatchDecodeWithPagedKVCacheWrapper,
-    BatchPrefillWithPagedKVCacheWrapper,
-    BatchPrefillWithRaggedKVCacheWrapper,
-    MultiLevelCascadeAttentionWrapper,
-)
-from flashinfer.decode import _get_range_buf, trtllm_batch_decode_with_kv_cache
-from flashinfer.prefill import trtllm_batch_context_with_kv_cache
-from flashinfer.utils import FP4Tensor
 from typing_extensions import override
 
 from vllm import envs
@@ -62,6 +55,60 @@ from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
 from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 from vllm.v1.kv_cache_interface import AttentionSpec, UniformTypeKVCacheSpecs
 from vllm.v1.utils import CpuGpuBuffer
+
+if TYPE_CHECKING:
+    from flashinfer import (
+        BatchDecodeWithPagedKVCacheWrapper,
+        BatchPrefillWithPagedKVCacheWrapper,
+        BatchPrefillWithRaggedKVCacheWrapper,
+        MultiLevelCascadeAttentionWrapper,
+    )
+    from flashinfer.decode import (
+        _get_range_buf,
+        trtllm_batch_decode_with_kv_cache,
+    )
+    from flashinfer.prefill import (
+        trtllm_batch_context_with_kv_cache,
+    )
+    from flashinfer.utils import FP4Tensor
+
+_flashinfer_imported = False
+
+
+def _ensure_flashinfer() -> None:
+    """Lazily import flashinfer to avoid CUDA init at module import."""
+    global _flashinfer_imported
+    if _flashinfer_imported:
+        return
+    _flashinfer_imported = True
+    import flashinfer
+    from flashinfer.decode import (
+        _get_range_buf,
+        trtllm_batch_decode_with_kv_cache,
+    )
+    from flashinfer.prefill import (
+        trtllm_batch_context_with_kv_cache,
+    )
+    from flashinfer.utils import FP4Tensor
+
+    g = globals()
+    g["BatchDecodeWithPagedKVCacheWrapper"] = (
+        flashinfer.BatchDecodeWithPagedKVCacheWrapper
+    )
+    g["BatchPrefillWithPagedKVCacheWrapper"] = (
+        flashinfer.BatchPrefillWithPagedKVCacheWrapper
+    )
+    g["BatchPrefillWithRaggedKVCacheWrapper"] = (
+        flashinfer.BatchPrefillWithRaggedKVCacheWrapper
+    )
+    g["MultiLevelCascadeAttentionWrapper"] = (
+        flashinfer.MultiLevelCascadeAttentionWrapper
+    )
+    g["_get_range_buf"] = _get_range_buf
+    g["trtllm_batch_decode_with_kv_cache"] = trtllm_batch_decode_with_kv_cache
+    g["trtllm_batch_context_with_kv_cache"] = trtllm_batch_context_with_kv_cache
+    g["FP4Tensor"] = FP4Tensor
+
 
 FLASHINFER_WORKSPACE_BUFFER_SIZE_BATCH_INVARIANT = 2048 * 1024 * 1024
 
@@ -171,6 +218,7 @@ class BatchDCPPrefillWrapper:
         self,
         workspace_buffer: torch.Tensor | None = None,
     ):
+        _ensure_flashinfer()
         self._context = BatchPrefillWithPagedKVCacheWrapper(
             workspace_buffer, get_kv_cache_layout()
         )
@@ -298,11 +346,11 @@ class FlashInferBackend(AttentionBackend):
         return "FLASHINFER"
 
     @staticmethod
-    def get_impl_cls() -> type["FlashInferImpl"]:
+    def get_impl_cls() -> type[FlashInferImpl]:
         return FlashInferImpl
 
     @staticmethod
-    def get_builder_cls() -> type["FlashInferMetadataBuilder"]:
+    def get_builder_cls() -> type[FlashInferMetadataBuilder]:
         return FlashInferMetadataBuilder
 
     @staticmethod
@@ -492,6 +540,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
         vllm_config: VllmConfig,
         device: torch.device,
     ):
+        _ensure_flashinfer()
         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
         self.cache_config = vllm_config.cache_config
         self.model_config = vllm_config.model_config
@@ -654,7 +703,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
     @override  # type: ignore[misc]
     @classmethod
     def get_cudagraph_support(
-        cls: type["FlashInferMetadataBuilder"],
+        cls: type[FlashInferMetadataBuilder],
         vllm_config: VllmConfig,
         kv_cache_spec: AttentionSpec,
     ) -> AttentionCGSupport:
@@ -1179,6 +1228,7 @@ class FlashInferImpl(AttentionImpl):
         kv_sharing_target_layer_name: int | None = None,
         sinks: torch.Tensor | None = None,
     ) -> None:
+        _ensure_flashinfer()
         self.num_heads = num_heads
         self.head_size = head_size
         self.scale = float(scale)
@@ -1637,6 +1687,7 @@ def fast_plan_decode(
     Part of the code get inspiration from the original plan from FlashInfer repo
     and the implementation of fast_decode_plan for FlashInfer in SGlang repo.
     """
+    _ensure_flashinfer()
     # Warm up with the original plan if it is first call, and always run the
     # original plan if we run for dynamic shape. For fixed shape (cudagraph),
     # this warm up is to generate the _cached_module for the decode wrapper.

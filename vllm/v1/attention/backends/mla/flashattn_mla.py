@@ -29,15 +29,12 @@ from vllm.v1.attention.backend import (
     MultipleOf,
     is_quantized_kv_cache,
 )
+from vllm.v1.attention.backends import fa_utils as _fa_utils
 from vllm.v1.attention.backends.fa_utils import (
     flash_attn_supports_mla,
     get_flash_attn_version,
 )
 from vllm.v1.kv_cache_interface import AttentionSpec
-from vllm.vllm_flash_attn import (  # type: ignore[attr-defined]
-    flash_attn_varlen_func,
-    get_scheduler_metadata,
-)
 
 logger = init_logger(__name__)
 
@@ -165,7 +162,7 @@ class FlashAttnMLAMetadataBuilder(MLACommonMetadataBuilder[FlashAttnMLAMetadata]
         max_num_splits,
     ):
         if self.fa_aot_schedule:
-            return get_scheduler_metadata(
+            return _fa_utils.get_scheduler_metadata(
                 batch_size=num_reqs,
                 max_seqlen_q=max_query_len,
                 max_seqlen_k=max_seq_len,
@@ -331,7 +328,7 @@ class FlashAttnMLAImpl(MLACommonImpl[FlashAttnMLAMetadata]):
         # to prevent invalid grid configuration during graph capture.
         max_seqlen_q = max(attn_metadata.decode.max_query_len, 1)
 
-        attn_out = flash_attn_varlen_func(
+        attn_out = _fa_utils.flash_attn_varlen_func(
             q=q_pe,
             k=k_pe_cache.unsqueeze(-2),  # Add head dim of 1
             v=kv_c_cache.unsqueeze(-2),  # Add head dim of 1

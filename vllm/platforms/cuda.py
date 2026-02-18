@@ -178,13 +178,7 @@ class CudaPlatformBase(Platform):
         # Note: model_config may be None during testing.
         # Skip hybrid (attention+mamba) models — their block_size is
         # managed by HybridAttentionMambaModelConfig
-        # TODO(matt): Limiting this to MLA models is a workaround to avoid
-        # CUDA initialization during testing. Fix this and remove the MLA check
-        if (
-            model_config is not None
-            and not model_config.is_hybrid
-            and model_config.use_mla
-        ):
+        if model_config is not None and not model_config.is_hybrid:
             cls._update_block_size_for_backend(
                 vllm_config,
                 user_specified_block_size,

@@ -9,47 +9,39 @@ from typing import ClassVar
 import numpy as np
 import torch
 
-from vllm.model_executor.layers.attention import Attention
-from vllm.v1.attention.backend import (
-    AttentionBackend,
-    AttentionImpl,
-    AttentionType,
-    MultipleOf,
-    is_quantized_kv_cache,
-)
-from vllm.v1.attention.backends.fa_utils import (
-    flash_attn_supports_fp8,
-    get_flash_attn_version,
-    is_flash_attn_varlen_func_available,
-)
-from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
-from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
-
-if is_flash_attn_varlen_func_available():
-    from vllm.v1.attention.backends.fa_utils import (
-        flash_attn_supports_sinks,
-        flash_attn_varlen_func,
-        get_scheduler_metadata,
-        reshape_and_cache_flash,
-    )
 from vllm.config import VllmConfig, get_current_vllm_config, get_layers_from_vllm_config
 from vllm.config.cache import CacheDType
 from vllm.distributed.parallel_state import get_dcp_group
 from vllm.logger import init_logger
+from vllm.model_executor.layers.attention import Attention
 from vllm.model_executor.layers.batch_invariant import (
     vllm_is_batch_invariant,
 )
 from vllm.platforms.interface import DeviceCapability
 from vllm.utils.math_utils import cdiv, round_up
 from vllm.v1.attention.backend import (
+    AttentionBackend,
     AttentionCGSupport,
+    AttentionImpl,
     AttentionMetadataBuilder,
+    AttentionType,
     CommonAttentionMetadata,
+    MultipleOf,
+    is_quantized_kv_cache,
+)
+from vllm.v1.attention.backends import fa_utils as _fa_utils
+from vllm.v1.attention.backends.fa_utils import (
+    flash_attn_supports_fp8,
+    flash_attn_supports_sinks,
+    get_flash_attn_version,
+    is_flash_attn_varlen_func_available,
 )
 from vllm.v1.attention.backends.utils import (
     get_dcp_local_seq_lens,
     get_kv_cache_layout,
 )
+from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
+from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 from vllm.v1.kv_cache_interface import AttentionSpec
 
 logger = init_logger(__name__)
@@ -400,7 +392,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             else:
                 qkv_dtype = self.kv_cache_dtype
             if aot_schedule:
-                return get_scheduler_metadata(
+                return _fa_utils.get_scheduler_metadata(
                     batch_size=batch_size,
                     max_seqlen_q=max_query_len,
                     max_seqlen_k=max_seq_len,
@@ -713,7 +705,7 @@ class FlashAttentionImpl(AttentionImpl):
                     if self.sliding_window is not None
                     else None
                 )
-                flash_attn_varlen_func(
+                _fa_utils.flash_attn_varlen_func(
                     q=query[:num_actual_tokens],
                     k=key_cache,
                     v=value_cache,
@@ -789,7 +781,7 @@ class FlashAttentionImpl(AttentionImpl):
         # and value[:num_actual_tokens] because the reshape_and_cache_flash
         # op uses the slot_mapping's shape to determine the number of
         # actual tokens.
-        reshape_and_cache_flash(
+        _fa_utils.reshape_and_cache_flash(
             key,
             value,
             key_cache,
@@ -826,7 +818,7 @@ class FlashAttentionImpl(AttentionImpl):
         sliding_window_size = (
             list(self.sliding_window) if self.sliding_window is not None else None
         )
-        context_attn_out, context_lse = flash_attn_varlen_func(
+        context_attn_out, context_lse = _fa_utils.flash_attn_varlen_func(
             q=query_across_dcp,
             k=key_cache,
             v=value_cache,
@@ -857,7 +849,7 @@ class FlashAttentionImpl(AttentionImpl):
         )
         context_lse_cor = context_lse_cor.transpose(0, 1).contiguous()
 
-        query_attn_out, query_lse = flash_attn_varlen_func(
+        query_attn_out, query_lse = _fa_utils.flash_attn_varlen_func(
             q=query,
             k=key,
             v=value,
@@ -931,7 +923,7 @@ class FlashAttentionImpl(AttentionImpl):
         sliding_window_size = (
             list(self.sliding_window) if self.sliding_window is not None else None
         )
-        flash_attn_varlen_func(
+        _fa_utils.flash_attn_varlen_func(
             q=query,
             k=key,
             v=value,
@@ -1073,7 +1065,7 @@ def cascade_attention(
     descale_shape = (cu_prefix_query_lens.shape[0] - 1, key_cache.shape[-2])
 
     # Process shared prefix.
-    prefix_output, prefix_lse = flash_attn_varlen_func(
+    prefix_output, prefix_lse = _fa_utils.flash_attn_varlen_func(
         q=query,
         k=key_cache,
         v=value_cache,
@@ -1101,7 +1093,7 @@ def cascade_attention(
     descale_shape = (cu_query_lens.shape[0] - 1, key_cache.shape[-2])
 
     # Process suffix per query.
-    suffix_output, suffix_lse = flash_attn_varlen_func(
+    suffix_output, suffix_lse = _fa_utils.flash_attn_varlen_func(
         q=query,
         k=key_cache,
         v=value_cache,

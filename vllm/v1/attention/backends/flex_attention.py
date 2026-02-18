@@ -41,11 +41,25 @@ from vllm.v1.kv_cache_interface import AttentionSpec
 
 logger = init_logger(__name__)
 
-torch._dynamo.config.recompile_limit = 16
-create_block_mask_compiled = torch.compile(
-    create_block_mask, fullgraph=True, mode="reduce-overhead"
-)
-flex_attention_compiled = torch.compile(flex_attention, fullgraph=True)
+create_block_mask_compiled = None
+flex_attention_compiled = None
+
+
+def _get_create_block_mask_compiled():
+    global create_block_mask_compiled
+    if create_block_mask_compiled is None:
+        torch._dynamo.config.recompile_limit = 16
+        create_block_mask_compiled = torch.compile(
+            create_block_mask, fullgraph=True, mode="reduce-overhead"
+        )
+    return create_block_mask_compiled
+
+
+def _get_flex_attention_compiled():
+    global flex_attention_compiled
+    if flex_attention_compiled is None:
+        flex_attention_compiled = torch.compile(flex_attention, fullgraph=True)
+    return flex_attention_compiled
 
 
 def _offsets_to_doc_ids_tensor(offsets: torch.Tensor) -> torch.Tensor:
@@ -633,7 +647,7 @@ class FlexAttentionMetadata:
     def build_block_mask(self) -> BlockMask:
         mask_mod = self.get_mask_mod()
         kv_len = self.total_cache_tokens if self.causal else self.num_actual_tokens
-        return create_block_mask_compiled(
+        return _get_create_block_mask_compiled()(
             mask_mod,
             None,
             None,
@@ -938,7 +952,7 @@ class FlexAttentionImpl(AttentionImpl):
         kernel_options = get_kernel_options(
             query, block_m, block_n, attn_metadata.direct_build
         )
-        out = flex_attention_compiled(
+        out = _get_flex_attention_compiled()(
             query,
             key_tensor,
             value_tensor,
