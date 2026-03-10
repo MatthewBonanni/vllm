@@ -269,6 +269,7 @@ class Plamo2MambaMixer(MambaBase, PluggableLayer):
             state_indices_tensor_p = attn_metadata.state_indices_tensor_p
             state_indices_tensor_d = attn_metadata.state_indices_tensor_d
             has_initial_states_p = attn_metadata.has_initial_states_p
+            has_initial_states_d = attn_metadata.has_initial_states_d
             prep_initial_states = attn_metadata.prep_initial_states
             chunk_size = attn_metadata.chunk_size
             seq_idx_p = attn_metadata.seq_idx_p
@@ -393,6 +394,12 @@ class Plamo2MambaMixer(MambaBase, PluggableLayer):
 
         # Process decode requests
         if has_decode:
+            # Clear stale state for new requests classified as decodes
+            if has_initial_states_d is not None:
+                new_indices = state_indices_tensor_d[~has_initial_states_d]
+                conv_state[:, new_indices] = 0
+                ssm_state[new_indices] = 0
+
             # 2. Convolution sequence transformation
             hidden_states_d = causal_conv1d_update(
                 hidden_states_d,
