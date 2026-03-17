@@ -762,10 +762,17 @@ def _run_single_benchmark(
     if is_sparse and indexer is not None:
         indexer.fill_random_indices(total_q, max_kv_len)
 
-    # Determine which forward method to use based on metadata
-    if metadata.decode is not None:
+    # Determine which forward method to use based on metadata.
+    # Non-sparse backends (MLACommonMetadata) use .decode/.prefill sub-objects.
+    # Sparse backends (FlashMLASparse, FlashInferMLASparse) use
+    # num_decode_tokens/num_prefills directly.
+    num_decode = getattr(metadata, "num_decode_tokens", 0)
+    num_prefill = getattr(metadata, "num_prefills", 0)
+    has_decode = getattr(metadata, "decode", None) is not None or num_decode > 0
+    has_prefill = getattr(metadata, "prefill", None) is not None or num_prefill > 0
+    if has_decode:
         forward_fn = lambda: impl.forward_mqa(decode_inputs, kv_cache, metadata, layer)
-    elif metadata.prefill is not None:
+    elif has_prefill:
         forward_fn = lambda: impl.forward_mha(
             prefill_inputs["q"],
             prefill_inputs["k_c_normed"],
@@ -872,6 +879,15 @@ def _run_mla_benchmark_batched(
     )
 
     results = []
+
+    # Initialize workspace manager (needed by metadata builders)
+    from vllm.v1.worker.workspace import (
+        init_workspace_manager,
+        is_workspace_manager_initialized,
+    )
+
+    if not is_workspace_manager_initialized():
+        init_workspace_manager(device)
 
     with set_current_vllm_config(vllm_config):
         # Clear cached prefill backend detection functions so they re-evaluate
