@@ -766,11 +766,14 @@ def _run_single_benchmark(
     # Non-sparse backends (MLACommonMetadata) use .decode/.prefill sub-objects.
     # Sparse backends (FlashMLASparse, FlashInferMLASparse) use
     # num_decode_tokens/num_prefills directly.
+    #
+    # sparse_mla_force_mqa overrides: even for prefill metadata, use MQA.
+    force_mqa = getattr(config, "sparse_mla_force_mqa", False)
     num_decode = getattr(metadata, "num_decode_tokens", 0)
     num_prefill = getattr(metadata, "num_prefills", 0)
     has_decode = getattr(metadata, "decode", None) is not None or num_decode > 0
     has_prefill = getattr(metadata, "prefill", None) is not None or num_prefill > 0
-    if has_decode:
+    if force_mqa or has_decode:
         forward_fn = lambda: impl.forward_mqa(decode_inputs, kv_cache, metadata, layer)
     elif has_prefill:
         forward_fn = lambda: impl.forward_mha(
