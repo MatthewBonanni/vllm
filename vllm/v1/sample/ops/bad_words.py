@@ -49,7 +49,7 @@ def apply_bad_words_with_drafts(
                 _apply_bad_words_single_batch(
                     logits[draft_idx],
                     bad_words_ids,
-                    past_tokens_ids[draft_idx],
+                    past_tokens_ids[i],
                 )
             remaining -= 1
             if not remaining:
