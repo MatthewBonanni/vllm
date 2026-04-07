@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import importlib.machinery
 import os
 import sys
 import types
@@ -17,6 +18,10 @@ if os.path.isdir(_cute_dir) and "flash_attn" not in sys.modules:
     else:
         _fa_mod.__path__ = [os.path.dirname(__file__)]
     _fa_mod.__package__ = "flash_attn"
+    _fa_mod.__spec__ = importlib.machinery.ModuleSpec(
+        "flash_attn", None, is_package=True
+    )
+    _fa_mod.__spec__.submodule_search_locations = _fa_mod.__path__
     sys.modules["flash_attn"] = _fa_mod
 
 from vllm.vllm_flash_attn.flash_attn_interface import (  # noqa: E402
