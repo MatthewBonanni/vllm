@@ -6,17 +6,13 @@ import os
 import sys
 import types
 
-# Set up a virtual `flash_attn` package so that `flash_attn.cute.*` imports
-# resolve without requiring the flash-attn pip package to be installed.
-# In symlink mode (VLLM_FLASH_ATTN_SRC_DIR), __path__ points at the real
-# source tree; in copy mode, it points at this package's directory.
+# In symlink mode (VLLM_FLASH_ATTN_SRC_DIR), cute/ is a symlink to the real
+# source tree and its files use `flash_attn.cute.*` imports (not rewritten).
+# Register a virtual `flash_attn` package so those imports resolve.
 _cute_dir = os.path.join(os.path.dirname(__file__), "cute")
-if os.path.isdir(_cute_dir) and "flash_attn" not in sys.modules:
+if os.path.islink(_cute_dir) and "flash_attn" not in sys.modules:
     _fa_mod = types.ModuleType("flash_attn")
-    if os.path.islink(_cute_dir):
-        _fa_mod.__path__ = [os.path.dirname(os.path.realpath(_cute_dir))]
-    else:
-        _fa_mod.__path__ = [os.path.dirname(__file__)]
+    _fa_mod.__path__ = [os.path.dirname(os.path.realpath(_cute_dir))]
     _fa_mod.__package__ = "flash_attn"
     _fa_mod.__spec__ = importlib.machinery.ModuleSpec(
         "flash_attn", None, is_package=True
