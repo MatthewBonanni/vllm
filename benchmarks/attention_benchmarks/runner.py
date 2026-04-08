@@ -208,6 +208,10 @@ def _create_backend_impl(
 
     scale = get_attention_scale(config.head_dim)
 
+    # Set v_head_dim for diff-headdim backends
+    if config.v_head_dim is not None and hasattr(backend_class, "set_head_size_v"):
+        backend_class.set_head_size_v(config.v_head_dim)
+
     impl = backend_class.get_impl_cls()(
         num_heads=config.num_q_heads,
         head_size=config.head_dim,
@@ -300,6 +304,7 @@ def _create_input_tensors(
         from vllm.platforms import current_platform
 
         q_dtype = current_platform.fp8_dtype()
+    v_dim = config.v_head_dim if config.v_head_dim is not None else config.head_dim
     q_list = [
         torch.randn(
             total_q, config.num_q_heads, config.head_dim, device=device, dtype=dtype
@@ -313,9 +318,7 @@ def _create_input_tensors(
         for _ in range(config.num_layers)
     ]
     v_list = [
-        torch.randn(
-            total_q, config.num_kv_heads, config.head_dim, device=device, dtype=dtype
-        )
+        torch.randn(total_q, config.num_kv_heads, v_dim, device=device, dtype=dtype)
         for _ in range(config.num_layers)
     ]
     return q_list, k_list, v_list
@@ -391,9 +394,8 @@ def _run_single_benchmark(
 ) -> tuple:
     """Run single benchmark iteration with warmup and timing loop."""
     total_q = q_list[0].shape[0]
-    out = torch.empty(
-        total_q, config.num_q_heads, config.head_dim, device=device, dtype=dtype
-    )
+    v_dim = config.v_head_dim if config.v_head_dim is not None else config.head_dim
+    out = torch.empty(total_q, config.num_q_heads, v_dim, device=device, dtype=dtype)
 
     # Warmup
     for _ in range(config.warmup_iters):
@@ -409,50 +411,69 @@ def _run_single_benchmark(
             )
     torch.accelerator.synchronize()
 
-    # Optionally capture a CUDA graph after warmup.
-    # Graph replay eliminates CPU launch overhead so timings reflect pure
-    # kernel time.
-    if config.use_cuda_graphs:
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            for i in range(config.num_layers):
-                impl.forward(
-                    layer,
-                    q_list[i],
-                    k_list[i],
-                    v_list[i],
-                    cache_list[i],
-                    attn_metadata,
-                    output=out,
-                )
-        benchmark_fn = graph.replay
-    else:
-
-        def benchmark_fn():
-            for i in range(config.num_layers):
-                impl.forward(
-                    layer,
-                    q_list[i],
-                    k_list[i],
-                    v_list[i],
-                    cache_list[i],
-                    attn_metadata,
-                    output=out,
-                )
-
-    # Benchmark
-    times = []
-    for _ in range(config.repeats):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-
-        start.record()
-        benchmark_fn()
-        end.record()
-
+    # ncu profiling mode: run the kernel once inside a cudaProfilerStart/Stop
+    # bracket, then return a dummy time.  The benchmark script handles
+    # launching ncu automatically when --ncu-profile is passed.
+    if config.ncu_profile:
+        torch.cuda.cudart().cudaProfilerStart()
+        for i in range(config.num_layers):
+            impl.forward(
+                layer,
+                q_list[i],
+                k_list[i],
+                v_list[i],
+                cache_list[i],
+                attn_metadata,
+                output=out,
+            )
         torch.accelerator.synchronize()
-        elapsed_ms = start.elapsed_time(end)
-        times.append(elapsed_ms / 1000.0 / config.num_layers)  # seconds per layer
+        torch.cuda.cudart().cudaProfilerStop()
+        times = [0.0]
+    else:
+        # Optionally capture a CUDA graph after warmup.
+        # Graph replay eliminates CPU launch overhead so timings reflect pure
+        # kernel time.
+        if config.use_cuda_graphs:
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                for i in range(config.num_layers):
+                    impl.forward(
+                        layer,
+                        q_list[i],
+                        k_list[i],
+                        v_list[i],
+                        cache_list[i],
+                        attn_metadata,
+                        output=out,
+                    )
+            benchmark_fn = graph.replay
+        else:
+
+            def benchmark_fn():
+                for i in range(config.num_layers):
+                    impl.forward(
+                        layer,
+                        q_list[i],
+                        k_list[i],
+                        v_list[i],
+                        cache_list[i],
+                        attn_metadata,
+                        output=out,
+                    )
+
+        # Benchmark
+        times = []
+        for _ in range(config.repeats):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+
+            start.record()
+            benchmark_fn()
+            end.record()
+
+            torch.accelerator.synchronize()
+            elapsed_ms = start.elapsed_time(end)
+            times.append(elapsed_ms / 1000.0 / config.num_layers)
 
     mem_stats = {}
     if config.profile_memory:

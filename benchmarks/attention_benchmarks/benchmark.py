@@ -26,6 +26,9 @@ Examples:
 """
 
 import argparse
+import os
+import shutil
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -83,13 +86,14 @@ def run_benchmark(config: BenchmarkConfig, **kwargs) -> BenchmarkResult:
         else:
             return run_standard_attention_benchmark(config)
     except Exception as e:
+        error_msg = str(e) or repr(e)
         return BenchmarkResult(
             config=config,
             mean_time=float("inf"),
             std_time=0,
             min_time=float("inf"),
             max_time=float("inf"),
-            error=str(e),
+            error=error_msg,
         )
 
 
@@ -115,9 +119,12 @@ def run_model_parameter_sweep(
     """
     all_results = []
 
-    console.print(
-        f"[yellow]Model sweep mode: testing {sweep.param_name} = {sweep.values}[/]"
+    sweep_desc = (
+        f"{sweep.param_name} = {sweep.values}"
+        if sweep.param_name
+        else f"{len(sweep.values)} configurations"
     )
+    console.print(f"[yellow]Model sweep mode: testing {sweep_desc}[/]")
 
     total = len(backends) * len(batch_specs) * len(sweep.values)
 
@@ -125,9 +132,9 @@ def run_model_parameter_sweep(
         for backend in backends:
             for spec in batch_specs:
                 for value in sweep.values:
-                    # Create config with modified model parameter
+                    # Create config with modified model parameter(s)
                     config_args = base_config_args.copy()
-                    config_args[sweep.param_name] = value
+                    sweep.apply(config_args, value)
 
                     # Create config with original backend for running
                     clean_config = BenchmarkConfig(
@@ -144,9 +151,14 @@ def run_model_parameter_sweep(
                     all_results.append(result)
 
                     if not result.success:
+                        err_label = (
+                            f"{sweep.param_name}={value}"
+                            if sweep.param_name
+                            else f"{value}"
+                        )
                         console.print(
-                            f"[red]Error {backend} {spec} {sweep.param_name}="
-                            f"{value}: {result.error}[/]"
+                            f"[red]Error {backend} {spec} {err_label}"
+                            f": {result.error}[/]"
                         )
 
                     pbar.update(1)
@@ -184,7 +196,10 @@ def run_model_parameter_sweep(
     )
 
     for param_value in sorted_param_values:
-        console.print(f"\n[bold cyan]{sweep.param_name} = {param_value}[/]")
+        label = (
+            f"{sweep.param_name} = {param_value}" if sweep.param_name else param_value
+        )
+        console.print(f"\n[bold cyan]{label}[/]")
         param_results = by_param_value[param_value]
 
         # Create modified results with original backend names
@@ -200,8 +215,9 @@ def run_model_parameter_sweep(
         formatter.print_table(modified_results, backends, compare_to_fastest=True)
 
     # Show optimal backend for each (param_value, batch_spec) combination
+    sweep_name = sweep.param_name or "config"
     console.print(
-        f"\n[bold cyan]Optimal backend for each ({sweep.param_name}, batch_spec):[/]"
+        f"\n[bold cyan]Optimal backend for each ({sweep_name}, batch_spec):[/]"
     )
 
     # Group by (param_value, batch_spec)
@@ -236,7 +252,10 @@ def run_model_parameter_sweep(
     for param_value, spec in sorted_keys:
         # Print header when param value changes
         if param_value != current_param_value:
-            console.print(f"\n  [bold]{sweep.param_name}={param_value}:[/]")
+            header = (
+                f"{sweep.param_name}={param_value}" if sweep.param_name else param_value
+            )
+            console.print(f"\n  [bold]{header}:[/]")
             current_param_value = param_value
 
         results = by_param_and_spec[(param_value, spec)]
@@ -495,6 +514,22 @@ def main():
             "in measurements (default: True)"
         ),
     )
+    parser.add_argument(
+        "--ncu-profile",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable Nsight Compute profiling mode. Automatically wraps the "
+            "script with ncu, capturing a profile with source correlation. "
+            "Use --ncu-output to set the output file name."
+        ),
+    )
+    parser.add_argument(
+        "--ncu-output",
+        type=str,
+        default="profile",
+        help="Output file name for ncu profile (default: 'profile').",
+    )
 
     # Parameter sweep (use YAML config for advanced sweeps)
     parser.add_argument(
@@ -513,6 +548,31 @@ def main():
     parser.add_argument("--output-json", help="Save to JSON")
 
     args = parser.parse_args()
+
+    # Re-exec under ncu if --ncu-profile and not already inside ncu.
+    if args.ncu_profile and "_NCU_INNER" not in os.environ:
+        ncu = shutil.which("ncu")
+        if ncu is None:
+            print("Error: 'ncu' not found in PATH", file=sys.stderr)
+            sys.exit(1)
+        cmd = [
+            ncu,
+            "--profile-from-start",
+            "off",
+            "--set",
+            "full",
+            "--import-source",
+            "yes",
+            "-o",
+            args.ncu_output,
+            sys.executable,
+            *sys.argv,
+        ]
+        env = os.environ.copy()
+        env["CUTE_DSL_LINEINFO"] = "1"
+        env["_NCU_INNER"] = "1"
+        print(f"Launching: {' '.join(cmd)}")
+        sys.exit(subprocess.call(cmd, env=env))
 
     console = Console()
     console.print("[bold cyan]vLLM Attention Benchmark[/]")
@@ -576,9 +636,20 @@ def main():
             model = yaml_config["model"]
             args.num_layers = model.get("num_layers", args.num_layers)
             args.head_dim = model.get("head_dim", args.head_dim)
+            args.v_head_dim = model.get("v_head_dim", getattr(args, "v_head_dim", None))
             args.num_q_heads = model.get("num_q_heads", args.num_q_heads)
             args.num_kv_heads = model.get("num_kv_heads", args.num_kv_heads)
             args.block_size = model.get("block_size", args.block_size)
+            # MLA-specific dimensions
+            args.kv_lora_rank = model.get(
+                "kv_lora_rank", getattr(args, "kv_lora_rank", None)
+            )
+            args.qk_nope_head_dim = model.get(
+                "qk_nope_head_dim", getattr(args, "qk_nope_head_dim", None)
+            )
+            args.qk_rope_head_dim = model.get(
+                "qk_rope_head_dim", getattr(args, "qk_rope_head_dim", None)
+            )
 
         # Benchmark settings (top-level keys)
         if "device" in yaml_config:
@@ -593,6 +664,8 @@ def main():
             args.kv_cache_dtype = yaml_config["kv_cache_dtype"]
         if "cuda_graphs" in yaml_config:
             args.cuda_graphs = yaml_config["cuda_graphs"]
+        if "ncu_profile" in yaml_config:
+            args.ncu_profile = yaml_config["ncu_profile"]
 
         # Parameter sweep configuration
         if "parameter_sweep" in yaml_config:
@@ -612,7 +685,7 @@ def main():
         if "model_parameter_sweep" in yaml_config:
             sweep_config = yaml_config["model_parameter_sweep"]
             args.model_parameter_sweep = ModelParameterSweep(
-                param_name=sweep_config["param_name"],
+                param_name=sweep_config.get("param_name"),
                 values=sweep_config["values"],
                 label_format=sweep_config.get(
                     "label_format", "{backend}_{param_name}_{value}"
@@ -713,6 +786,7 @@ def main():
                         profile_memory=args.profile_memory,
                         kv_cache_dtype=args.kv_cache_dtype,
                         use_cuda_graphs=args.cuda_graphs,
+                        ncu_profile=args.ncu_profile,
                     )
 
                     # Add decode pipeline config
@@ -858,6 +932,7 @@ def main():
         base_config_args = {
             "num_layers": args.num_layers,
             "head_dim": args.head_dim,
+            "v_head_dim": getattr(args, "v_head_dim", None),
             "num_q_heads": args.num_q_heads,
             "num_kv_heads": args.num_kv_heads,
             "block_size": args.block_size,
@@ -867,6 +942,10 @@ def main():
             "profile_memory": args.profile_memory,
             "kv_cache_dtype": args.kv_cache_dtype,
             "use_cuda_graphs": args.cuda_graphs,
+            "ncu_profile": args.ncu_profile,
+            "kv_lora_rank": getattr(args, "kv_lora_rank", None),
+            "qk_nope_head_dim": getattr(args, "qk_nope_head_dim", None),
+            "qk_rope_head_dim": getattr(args, "qk_rope_head_dim", None),
         }
         all_results = run_model_parameter_sweep(
             backends,
@@ -882,6 +961,7 @@ def main():
         base_config_args = {
             "num_layers": args.num_layers,
             "head_dim": args.head_dim,
+            "v_head_dim": getattr(args, "v_head_dim", None),
             "num_q_heads": args.num_q_heads,
             "num_kv_heads": args.num_kv_heads,
             "block_size": args.block_size,
@@ -891,6 +971,7 @@ def main():
             "profile_memory": args.profile_memory,
             "kv_cache_dtype": args.kv_cache_dtype,
             "use_cuda_graphs": args.cuda_graphs,
+            "ncu_profile": args.ncu_profile,
         }
         all_results = run_parameter_sweep(
             backends, args.batch_specs, base_config_args, args.parameter_sweep, console
@@ -914,6 +995,7 @@ def main():
                             batch_spec=spec,
                             num_layers=args.num_layers,
                             head_dim=args.head_dim,
+                            v_head_dim=getattr(args, "v_head_dim", None),
                             num_q_heads=args.num_q_heads,
                             num_kv_heads=args.num_kv_heads,
                             block_size=args.block_size,
@@ -923,6 +1005,7 @@ def main():
                             profile_memory=args.profile_memory,
                             kv_cache_dtype=args.kv_cache_dtype,
                             use_cuda_graphs=args.cuda_graphs,
+                            ncu_profile=args.ncu_profile,
                         )
 
                         result = run_benchmark(config)

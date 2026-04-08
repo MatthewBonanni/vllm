@@ -182,17 +182,32 @@ class ParameterSweep:
 
 @dataclass
 class ModelParameterSweep:
-    """Configuration for sweeping a model configuration parameter."""
+    """Configuration for sweeping model configuration parameter(s).
 
-    param_name: str  # Name of the model config parameter to sweep (e.g., "num_q_heads")
-    values: list[Any]  # List of values to test
-    label_format: str = "{backend}_{param_name}_{value}"  # Result label template
+    Supports two modes:
+    - Single param: param_name="head_dim", values=[128, 256, 512]
+    - Multi param: values=[{head_dim: 192, v_head_dim: 128}, {head_dim: 256}]
+      When values are dicts, each dict's keys are applied as config overrides.
+    """
+
+    param_name: str | None = None
+    values: list[Any] = None  # type: ignore[assignment]
+    label_format: str = "{backend}_{param_name}_{value}"
 
     def get_label(self, backend: str, value: Any) -> str:
         """Generate a label for a specific parameter value."""
+        if isinstance(value, dict):
+            return self.label_format.format(backend=backend, value=value, **value)
         return self.label_format.format(
             backend=backend, param_name=self.param_name, value=value
         )
+
+    def apply(self, config_args: dict, value: Any) -> None:
+        """Apply a sweep value to config args."""
+        if isinstance(value, dict):
+            config_args.update(value)
+        else:
+            config_args[self.param_name] = value
 
 
 @dataclass
@@ -212,6 +227,7 @@ class BenchmarkConfig:
     warmup_iters: int = 3
     profile_memory: bool = False
     use_cuda_graphs: bool = False
+    ncu_profile: bool = False
 
     # "auto" or "fp8"
     kv_cache_dtype: str = "auto"
