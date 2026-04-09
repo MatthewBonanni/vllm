@@ -1912,9 +1912,6 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             device=vllm_config.device_config.device,
         )
 
-        # Set _pad_v based on the selected backend
-        self._pad_v = self._prefill_impl.requires_v_padding
-
         self.dcp_world_size: int = -1
 
         self.cp_kv_cache_interleave_size: int = (
@@ -2218,11 +2215,6 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
                     q, kv_c_and_k_pe_cache, attn_metadata, k_scale
                 )
 
-            # unpad if necessary
-            if self._pad_v:
-                context_output = context_output[..., : v.shape[-1]]
-                suffix_output = suffix_output[..., : v.shape[-1]]
-
             output = output.view(-1, self.num_heads, self.v_head_dim)
             merge_attn_states(
                 output=output,
@@ -2233,7 +2225,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
                 prefill_tokens_with_context=prefill_metadata.chunked_context.prefill_tokens_with_context,
             )
         else:
-            output_prefill = output_prefill[..., : v.shape[-1]].flatten(start_dim=-2)
+            output_prefill = output_prefill.flatten(start_dim=-2)
             output.copy_(output_prefill)
 
     @abstractmethod

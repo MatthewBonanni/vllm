@@ -90,8 +90,6 @@ class CudnnPrefillBackend(MLAPrefillBackend):
 class CudnnPrefillImpl(MLAPrefillImpl):
     """cuDNN implementation for MLA prefill."""
 
-    requires_v_padding: bool = False
-
     def __init__(
         self,
         num_heads: int,

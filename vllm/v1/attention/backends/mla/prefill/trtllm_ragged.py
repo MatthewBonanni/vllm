@@ -57,8 +57,6 @@ class TrtllmRaggedPrefillBackend(MLAPrefillBackend):
 class TrtllmRaggedPrefillImpl(MLAPrefillImpl):
     """TRT-LLM Ragged implementation for MLA prefill."""
 
-    requires_v_padding: bool = False
-
     def __init__(
         self,
         num_heads: int,

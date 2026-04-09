@@ -114,9 +114,6 @@ class MLAPrefillImpl(ABC):
     for new tokens (causal) and context chunks (non-causal).
     """
 
-    # Whether this backend needs to pad V to match Q/K head dim
-    requires_v_padding: bool = True
-
     def __init__(
         self,
         num_heads: int,
