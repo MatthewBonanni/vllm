@@ -242,6 +242,7 @@ class BenchmarkConfig:
     # Backend-specific tuning
     num_kv_splits: int | None = None  # CUTLASS MLA
     reorder_batch_threshold: int | None = None  # FlashAttn MLA, FlashMLA
+    num_splits: int | None = None  # FlashAttention split-K (0=auto, 1=disabled)
 
 
 @dataclass

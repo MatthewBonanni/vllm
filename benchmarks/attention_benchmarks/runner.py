@@ -562,6 +562,12 @@ def run_attention_benchmark(config: BenchmarkConfig) -> BenchmarkResult:
                 common_attn_metadata=common_metadata,
             )
 
+            # Override num_splits for split-K testing (FlashAttention only)
+            if config.num_splits is not None and hasattr(
+                attn_metadata, "max_num_splits"
+            ):
+                attn_metadata.max_num_splits = config.num_splits
+
             # Only quantize queries when the impl supports it
             quantize_query = config.kv_cache_dtype.startswith("fp8") and getattr(
                 impl, "supports_quant_query_input", False

@@ -515,6 +515,12 @@ def main():
         ),
     )
     parser.add_argument(
+        "--num-splits",
+        type=int,
+        default=None,
+        help="FlashAttention split-K factor (0=auto heuristic, 1=disabled, >1=force N)",
+    )
+    parser.add_argument(
         "--ncu-profile",
         action="store_true",
         default=False,
@@ -943,6 +949,7 @@ def main():
             "kv_cache_dtype": args.kv_cache_dtype,
             "use_cuda_graphs": args.cuda_graphs,
             "ncu_profile": args.ncu_profile,
+            "num_splits": getattr(args, "num_splits", None),
             "kv_lora_rank": getattr(args, "kv_lora_rank", None),
             "qk_nope_head_dim": getattr(args, "qk_nope_head_dim", None),
             "qk_rope_head_dim": getattr(args, "qk_rope_head_dim", None),
@@ -972,6 +979,7 @@ def main():
             "kv_cache_dtype": args.kv_cache_dtype,
             "use_cuda_graphs": args.cuda_graphs,
             "ncu_profile": args.ncu_profile,
+            "num_splits": getattr(args, "num_splits", None),
         }
         all_results = run_parameter_sweep(
             backends, args.batch_specs, base_config_args, args.parameter_sweep, console
@@ -1006,6 +1014,7 @@ def main():
                             kv_cache_dtype=args.kv_cache_dtype,
                             use_cuda_graphs=args.cuda_graphs,
                             ncu_profile=args.ncu_profile,
+                            num_splits=getattr(args, "num_splits", None),
                         )
 
                         result = run_benchmark(config)
