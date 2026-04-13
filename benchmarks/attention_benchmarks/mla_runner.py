@@ -8,6 +8,8 @@ This module provides helpers for running MLA backends without
 needing full VllmConfig integration.
 """
 
+import statistics
+
 import numpy as np
 import torch
 from batch_spec import parse_batch_spec
@@ -29,6 +31,7 @@ from vllm.config import (
     VllmConfig,
     set_current_vllm_config,
 )
+from vllm.triton_utils import triton
 
 # ============================================================================
 # VllmConfig Creation
@@ -821,7 +824,7 @@ def _run_single_benchmark(
             num_prefill, mla_dims, query_fmt, device, torch.bfloat16
         )
 
-    # Build forward function
+    # Build forward function (runs all layers once)
     def forward_fn():
         results = []
         if has_decode:
@@ -840,44 +843,32 @@ def _run_single_benchmark(
             )
         return results[0] if len(results) == 1 else tuple(results)
 
-    # Warmup
-    for _ in range(config.warmup_iters):
-        forward_fn()
-    torch.accelerator.synchronize()
-
-    # Optionally capture a CUDA graph after warmup.
-    # Graph replay eliminates CPU launch overhead so timings reflect pure
-    # kernel time.
-    if config.use_cuda_graphs:
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            forward_fn()
-        benchmark_fn = graph.replay
-    else:
-        benchmark_fn = forward_fn
-
-    # Benchmark
-    times = []
-    for _ in range(config.repeats):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-
-        start.record()
+    def benchmark_fn():
         for _ in range(config.num_layers):
-            benchmark_fn()
-        end.record()
+            forward_fn()
 
-        torch.accelerator.synchronize()
-        elapsed_ms = start.elapsed_time(end)
-        times.append(elapsed_ms / 1000.0 / config.num_layers)
+    if config.use_cuda_graphs:
+        all_ms = triton.testing.do_bench_cudagraph(
+            benchmark_fn,
+            return_mode="all",
+        )
+    else:
+        all_ms = triton.testing.do_bench(
+            benchmark_fn,
+            return_mode="all",
+        )
 
-    mean_time = float(np.mean(times))
+    # Convert ms to seconds per layer
+    times = [t / 1000.0 / config.num_layers for t in all_ms]
+    mean_time = statistics.mean(times)
+
     return BenchmarkResult(
         config=config,
         mean_time=mean_time,
-        std_time=float(np.std(times)),
-        min_time=float(np.min(times)),
-        max_time=float(np.max(times)),
+        median_time=statistics.median(times),
+        std_time=statistics.stdev(times) if len(times) > 1 else 0.0,
+        min_time=min(times),
+        max_time=max(times),
         throughput_tokens_per_sec=total_q / mean_time if mean_time > 0 else 0,
     )
 

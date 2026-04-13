@@ -122,5 +122,3 @@ prefill_backends:
   - trtllm
 
 device: "cuda:0"
-repeats: 20
-warmup_iters: 5

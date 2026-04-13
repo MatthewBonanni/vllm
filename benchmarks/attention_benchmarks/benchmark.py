@@ -90,6 +90,7 @@ def run_benchmark(config: BenchmarkConfig, **kwargs) -> BenchmarkResult:
         return BenchmarkResult(
             config=config,
             mean_time=float("inf"),
+            median_time=float("inf"),
             std_time=0,
             min_time=float("inf"),
             max_time=float("inf"),
@@ -496,8 +497,6 @@ def main():
 
     # Benchmark settings
     parser.add_argument("--device", default="cuda:0", help="Device")
-    parser.add_argument("--repeats", type=int, default=1, help="Repetitions")
-    parser.add_argument("--warmup-iters", type=int, default=3, help="Warmup iterations")
     parser.add_argument("--profile-memory", action="store_true", help="Profile memory")
     parser.add_argument(
         "--kv-cache-dtype",
@@ -510,8 +509,9 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Launch kernels with CUDA graphs to eliminate CPU overhead"
-            "in measurements (default: True)"
+            "Use triton do_bench_cudagraph (True) or do_bench (False) "
+            "for timing. CUDA graphs eliminate CPU launch overhead "
+            "(default: True)"
         ),
     )
     parser.add_argument(
@@ -660,10 +660,6 @@ def main():
         # Benchmark settings (top-level keys)
         if "device" in yaml_config:
             args.device = yaml_config["device"]
-        if "repeats" in yaml_config:
-            args.repeats = yaml_config["repeats"]
-        if "warmup_iters" in yaml_config:
-            args.warmup_iters = yaml_config["warmup_iters"]
         if "profile_memory" in yaml_config:
             args.profile_memory = yaml_config["profile_memory"]
         if "kv_cache_dtype" in yaml_config:
@@ -787,8 +783,6 @@ def main():
                         num_kv_heads=args.num_kv_heads,
                         block_size=args.block_size,
                         device=args.device,
-                        repeats=args.repeats,
-                        warmup_iters=args.warmup_iters,
                         profile_memory=args.profile_memory,
                         kv_cache_dtype=args.kv_cache_dtype,
                         use_cuda_graphs=args.cuda_graphs,
@@ -829,6 +823,7 @@ def main():
                         result = BenchmarkResult(
                             config=config,
                             mean_time=timing["mean"],
+                            median_time=timing.get("median", timing["mean"]),
                             std_time=timing["std"],
                             min_time=timing["min"],
                             max_time=timing["max"],
@@ -850,6 +845,7 @@ def main():
                         result = BenchmarkResult(
                             config=config,
                             mean_time=float("inf"),
+                            median_time=float("inf"),
                             std_time=0,
                             min_time=float("inf"),
                             max_time=float("inf"),
@@ -943,8 +939,6 @@ def main():
             "num_kv_heads": args.num_kv_heads,
             "block_size": args.block_size,
             "device": args.device,
-            "repeats": args.repeats,
-            "warmup_iters": args.warmup_iters,
             "profile_memory": args.profile_memory,
             "kv_cache_dtype": args.kv_cache_dtype,
             "use_cuda_graphs": args.cuda_graphs,
@@ -973,8 +967,6 @@ def main():
             "num_kv_heads": args.num_kv_heads,
             "block_size": args.block_size,
             "device": args.device,
-            "repeats": args.repeats,
-            "warmup_iters": args.warmup_iters,
             "profile_memory": args.profile_memory,
             "kv_cache_dtype": args.kv_cache_dtype,
             "use_cuda_graphs": args.cuda_graphs,
@@ -1008,8 +1000,6 @@ def main():
                             num_kv_heads=args.num_kv_heads,
                             block_size=args.block_size,
                             device=args.device,
-                            repeats=args.repeats,
-                            warmup_iters=args.warmup_iters,
                             profile_memory=args.profile_memory,
                             kv_cache_dtype=args.kv_cache_dtype,
                             use_cuda_graphs=args.cuda_graphs,
@@ -1054,8 +1044,6 @@ def main():
                             num_kv_heads=args.num_kv_heads,
                             block_size=args.block_size,
                             device=args.device,
-                            repeats=args.repeats,
-                            warmup_iters=args.warmup_iters,
                             profile_memory=args.profile_memory,
                             prefill_backend=pb,
                         )

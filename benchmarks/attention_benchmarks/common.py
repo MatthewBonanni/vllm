@@ -223,8 +223,6 @@ class BenchmarkConfig:
     block_size: int
     device: str
     dtype: torch.dtype = torch.float16
-    repeats: int = 1
-    warmup_iters: int = 3
     profile_memory: bool = False
     use_cuda_graphs: bool = False
     ncu_profile: bool = False
@@ -251,6 +249,7 @@ class BenchmarkResult:
 
     config: BenchmarkConfig
     mean_time: float  # seconds
+    median_time: float  # seconds
     std_time: float  # seconds
     min_time: float  # seconds
     max_time: float  # seconds
@@ -269,6 +268,7 @@ class BenchmarkResult:
         return {
             "config": asdict(self.config),
             "mean_time": self.mean_time,
+            "median_time": self.median_time,
             "std_time": self.std_time,
             "min_time": self.min_time,
             "max_time": self.max_time,
