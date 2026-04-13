@@ -600,9 +600,10 @@ class MLAAttention(nn.Module, AttentionLayerBase):
         # Outside this range or with cached context, MQA is faster.
         if is_sparse_impl and num_mha_tokens > 0:
             max_seq_len = getattr(attn_metadata, "max_seq_len", 0)
+            topk = self.impl.topk_indices_buffer.shape[1]  # type: ignore[union-attr]
             use_mha = (
                 not getattr(attn_metadata, "has_context", False)
-                and 128 <= max_seq_len <= 8192
+                and (max_seq_len <= topk or 128 <= max_seq_len <= 8192)
                 and not self._vllm_config.attention_config.sparse_mla_force_mqa
             )
             if not use_mha:
