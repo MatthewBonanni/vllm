@@ -240,6 +240,7 @@ class FlashAttentionMetadata:
     scheduler_metadata: torch.Tensor | None = None
     prefix_scheduler_metadata: torch.Tensor | None = None
     max_num_splits: int = 0
+    swap_ab: bool = False
 
     causal: bool = True
 
@@ -787,6 +788,7 @@ class FlashAttentionImpl(AttentionImpl):
                     k_descale=k_descale,
                     v_descale=v_descale,
                     num_splits=attn_metadata.max_num_splits,
+                    swap_ab=attn_metadata.swap_ab,
                     s_aux=self.sinks,
                 )
                 return output
