@@ -179,6 +179,10 @@ class FlashInferMLASparseMetadata(AttentionMetadata):
     prefill_query_start_loc: torch.Tensor | None = None
     prefill_max_query_len: int = 0
     has_context: bool = False
+    prefill_query_lens_cpu: torch.Tensor | None = None
+    prefill_cu_seq_lens_kv: torch.Tensor | None = None
+    prefill_max_kv_len: int = 0
+    prefill_block_table: torch.Tensor | None = None
 
 
 class FlashInferMLASparseMetadataBuilder(
@@ -234,9 +238,15 @@ class FlashInferMLASparseMetadataBuilder(
         req_id_per_token_tensor = self.req_id_per_token_buffer[:num_tokens]
 
         num_decodes, num_prefills, num_decode_tokens, _ = split_decodes_and_prefills(cm)
-        prefill_query_start_loc, prefill_max_query_len, has_context = (
-            build_sparse_mla_prefill_fields(cm, num_decodes, num_prefills)
-        )
+        (
+            prefill_query_start_loc,
+            prefill_max_query_len,
+            has_context,
+            prefill_query_lens_cpu,
+            prefill_cu_seq_lens_kv,
+            prefill_max_kv_len,
+            prefill_block_table,
+        ) = build_sparse_mla_prefill_fields(cm, num_decodes, num_prefills)
 
         return FlashInferMLASparseMetadata(
             num_reqs=cm.num_reqs,
@@ -256,6 +266,10 @@ class FlashInferMLASparseMetadataBuilder(
             prefill_query_start_loc=prefill_query_start_loc,
             prefill_max_query_len=prefill_max_query_len,
             has_context=has_context,
+            prefill_query_lens_cpu=prefill_query_lens_cpu,
+            prefill_cu_seq_lens_kv=prefill_cu_seq_lens_kv,
+            prefill_max_kv_len=prefill_max_kv_len,
+            prefill_block_table=prefill_block_table,
         )
 
 

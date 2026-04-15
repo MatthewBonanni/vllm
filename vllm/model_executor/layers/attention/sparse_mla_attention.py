@@ -10,6 +10,7 @@ import vllm._custom_ops as ops
 from vllm.config import get_current_vllm_config
 from vllm.logger import init_logger
 from vllm.triton_utils import tl, triton
+from vllm.utils.flashinfer import has_flashinfer
 from vllm.v1.attention.backend import (
     AttentionMetadata,
     SparseMLAAttentionImpl,
@@ -33,22 +34,28 @@ def build_sparse_mla_prefill_fields(
     cm: "CommonAttentionMetadata",
     num_decodes: int,
     num_prefills: int,
-) -> tuple[torch.Tensor | None, int, bool]:
+) -> tuple[
+    torch.Tensor | None,  # prefill_query_start_loc
+    int,  # prefill_max_query_len
+    bool,  # has_context
+    torch.Tensor | None,  # prefill_query_lens_cpu
+    torch.Tensor | None,  # prefill_cu_seq_lens_kv
+    int,  # prefill_max_kv_len
+    torch.Tensor | None,  # prefill_block_table
+]:
     """Compute prefill fields for sparse MLA metadata builders.
 
     Mirrors how MLACommonMetadataBuilder.build() computes prefill_query_start_loc.
-
-    Returns:
-        (prefill_query_start_loc, prefill_max_query_len, has_context)
     """
     if num_prefills == 0:
-        return None, 0, False
+        return None, 0, False, None, None, 0, None
 
     offset = cm.query_start_loc[num_decodes]
     prefill_query_start_loc = cm.query_start_loc[num_decodes:] - offset
 
     qsl_cpu = cm.query_start_loc_cpu
-    prefill_qlens = qsl_cpu[num_decodes + 1 :] - qsl_cpu[num_decodes:-1]
+    prefill_qsl_cpu = qsl_cpu[num_decodes:] - qsl_cpu[num_decodes]
+    prefill_qlens = prefill_qsl_cpu[1:] - prefill_qsl_cpu[:-1]
     prefill_max_query_len = int(prefill_qlens.max().item())
 
     has_context = False
@@ -59,7 +66,31 @@ def build_sparse_mla_prefill_fields(
             has_context = True
             break
 
-    return prefill_query_start_loc, prefill_max_query_len, has_context
+    # Precompute context-prefill fields
+    prefill_cu_seq_lens_kv = None
+    prefill_max_kv_len = 0
+    prefill_block_table = None
+    if has_context:
+        prefill_seq_lens = cm.seq_lens[num_decodes : num_decodes + num_prefills]
+        seq_lens_t = prefill_seq_lens.to(torch.int32)
+        prefill_cu_seq_lens_kv = torch.zeros(
+            num_prefills + 1, dtype=torch.int32, device=cm.seq_lens.device
+        )
+        torch.cumsum(seq_lens_t, dim=0, out=prefill_cu_seq_lens_kv[1:])
+        prefill_max_kv_len = int(seq_lens_t.max().item())
+        prefill_block_table = cm.block_table_tensor[
+            num_decodes : num_decodes + num_prefills
+        ]
+
+    return (
+        prefill_query_start_loc,
+        prefill_max_query_len,
+        has_context,
+        prefill_qlens,
+        prefill_cu_seq_lens_kv,
+        prefill_max_kv_len,
+        prefill_block_table,
+    )
 
 
 @triton.jit
@@ -182,12 +213,17 @@ class SparseMLACommonImpl(SparseMLAAttentionImpl[T], Generic[T]):
         self.kv_b_proj = kv_b_proj
 
         assert indexer is not None
-        self.topk_indices_buffer: torch.Tensor | None = getattr(
-            indexer, "topk_indices_buffer", None
-        )
+        self.topk_indices_buffer: torch.Tensor | None = indexer.topk_indices_buffer  # type: ignore[attr-defined]
 
         fa_version = get_flash_attn_version(head_size=qk_head_dim)
         self._fa4_available = fa_version is not None and fa_version >= 4
+
+        self._use_flashinfer_concat_mla_k = (
+            has_flashinfer()
+            and (self.num_heads == 128)
+            and (self.qk_nope_head_dim == 128)
+            and (self.qk_rope_head_dim == 64)
+        )
 
         self.dcp_world_size: int = -1
         self.cp_kv_cache_interleave_size: int = (
@@ -202,8 +238,11 @@ class SparseMLACommonImpl(SparseMLAAttentionImpl[T], Generic[T]):
             dtype=k_nope.dtype,
             device=k_nope.device,
         )
-        k[..., : k_nope.shape[-1]] = k_nope
-        k[..., k_nope.shape[-1] :] = k_pe
+        if self._use_flashinfer_concat_mla_k:
+            torch.ops.vllm.flashinfer_concat_mla_k(k, k_nope, k_pe)
+        else:
+            k[..., : k_nope.shape[-1]] = k_nope
+            k[..., k_nope.shape[-1] :] = k_pe
         return k
 
     def _gather_and_decompress_all(
@@ -276,19 +315,15 @@ class SparseMLACommonImpl(SparseMLAAttentionImpl[T], Generic[T]):
             )
 
         device = q.device
-        prefill_qsl = getattr(attn_metadata, "prefill_query_start_loc", None)
-        prefill_max_ql: int = getattr(attn_metadata, "prefill_max_query_len", 0)
-        has_context: bool = getattr(attn_metadata, "has_context", False)
-
+        prefill_qsl = attn_metadata.prefill_query_start_loc
         assert prefill_qsl is not None, (
             "Metadata must provide prefill_query_start_loc for forward_mha"
         )
 
-        num_decodes: int = getattr(attn_metadata, "num_decodes", 0)
-        num_prefills: int = getattr(attn_metadata, "num_prefills", 0)
-        num_decode_tokens: int = getattr(attn_metadata, "num_decode_tokens", 0)
+        prefill_max_ql = attn_metadata.prefill_max_query_len
+        num_decode_tokens = attn_metadata.num_decode_tokens
 
-        if not has_context:
+        if not attn_metadata.has_context:
             kv_nope = self.kv_b_proj(kv_c_normed)[0].view(
                 -1, self.num_heads, self.qk_nope_head_dim + self.v_head_dim
             )
@@ -300,22 +335,14 @@ class SparseMLACommonImpl(SparseMLAAttentionImpl[T], Generic[T]):
             max_q_len = prefill_max_ql
             max_kv_len = prefill_max_ql
         else:
-            all_seq_lens = getattr(attn_metadata, "seq_lens", None)
-            assert all_seq_lens is not None
-            prefill_seq_lens = all_seq_lens[num_decodes : num_decodes + num_prefills]
+            cu_seqlens_k = attn_metadata.prefill_cu_seq_lens_kv
+            assert cu_seqlens_k is not None
+            prefill_block_table = attn_metadata.prefill_block_table
+            assert prefill_block_table is not None
+            total_kv_tokens = int(cu_seqlens_k[-1].item())
+            max_kv_len = attn_metadata.prefill_max_kv_len
 
-            seq_lens_t = prefill_seq_lens.to(torch.int32)
-            cu_seqlens_k = torch.zeros(
-                num_prefills + 1, dtype=torch.int32, device=device
-            )
-            torch.cumsum(seq_lens_t, dim=0, out=cu_seqlens_k[1:])
-            total_kv_tokens = cu_seqlens_k[-1].item()
-            max_kv_len = seq_lens_t.max().item() if num_prefills > 0 else 0
-
-            block_table = getattr(attn_metadata, "block_table", None)
-            assert block_table is not None
-            prefill_block_table = block_table[num_decodes : num_decodes + num_prefills]
-
+            seq_lens_t = (cu_seqlens_k[1:] - cu_seqlens_k[:-1]).to(torch.int32)
             k, v = self._gather_and_decompress_all(
                 kv_c_and_k_pe_cache,
                 prefill_block_table,
@@ -325,15 +352,7 @@ class SparseMLACommonImpl(SparseMLAAttentionImpl[T], Generic[T]):
                 k_scale,
             )
 
-            prefill_qsl_cpu = prefill_qsl.cpu()
-            max_q_len = (
-                max(
-                    (prefill_qsl_cpu[i + 1] - prefill_qsl_cpu[i]).item()
-                    for i in range(num_prefills)
-                )
-                if num_prefills > 0
-                else 0
-            )
+            max_q_len = prefill_max_ql
 
         assert self.topk_indices_buffer is not None
         topk = self.topk_indices_buffer.shape[1]
@@ -358,11 +377,10 @@ class SparseMLACommonImpl(SparseMLAAttentionImpl[T], Generic[T]):
                 dense_mask_to_block_sparse,
             )
 
-            prefill_qsl_cpu = prefill_qsl.cpu()
-            q_lens = [
-                (prefill_qsl_cpu[i + 1] - prefill_qsl_cpu[i]).item()
-                for i in range(num_prefills)
-            ]
+            prefill_query_lens_cpu = attn_metadata.prefill_query_lens_cpu
+            assert prefill_query_lens_cpu is not None
+            q_lens = prefill_query_lens_cpu.tolist()
+            num_prefills = len(q_lens)
 
             num_prefill_tokens = q.shape[0]
             topk_all = self.topk_indices_buffer[

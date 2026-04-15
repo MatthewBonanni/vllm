@@ -793,13 +793,11 @@ def _run_single_benchmark(
         has_decode = True
         has_prefill = False
     elif is_sparse:
-        num_decode_tokens = getattr(metadata, "num_decode_tokens", 0)
-        num_prefills = getattr(metadata, "num_prefills", 0)
-        has_decode = num_decode_tokens > 0
-        has_prefill = num_prefills > 0
+        has_decode = metadata.num_decode_tokens > 0
+        has_prefill = metadata.num_prefills > 0
     else:
-        has_decode = getattr(metadata, "decode", None) is not None
-        has_prefill = getattr(metadata, "prefill", None) is not None
+        has_decode = metadata.decode is not None
+        has_prefill = metadata.prefill is not None
     if not has_decode and not has_prefill:
         raise RuntimeError("Metadata has neither decode nor prefill metadata")
 

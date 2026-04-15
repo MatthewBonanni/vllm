@@ -160,6 +160,10 @@ class FlashMLASparseMetadata(AttentionMetadata):
     prefill_query_start_loc: torch.Tensor | None = None
     prefill_max_query_len: int = 0
     has_context: bool = False
+    prefill_query_lens_cpu: torch.Tensor | None = None
+    prefill_cu_seq_lens_kv: torch.Tensor | None = None
+    prefill_max_kv_len: int = 0
+    prefill_block_table: torch.Tensor | None = None
 
     @dataclass
     class FP8KernelMetadata:
@@ -527,9 +531,15 @@ class FlashMLASparseMetadataBuilder(AttentionMetadataBuilder[FlashMLASparseMetad
             cm,
             decode_threshold=self.reorder_batch_threshold or 1,
         )
-        prefill_query_start_loc, prefill_max_query_len, has_context = (
-            build_sparse_mla_prefill_fields(cm, num_decodes, num_prefills)
-        )
+        (
+            prefill_query_start_loc,
+            prefill_max_query_len,
+            has_context,
+            prefill_query_lens_cpu,
+            prefill_cu_seq_lens_kv,
+            prefill_max_kv_len,
+            prefill_block_table,
+        ) = build_sparse_mla_prefill_fields(cm, num_decodes, num_prefills)
 
         metadata = FlashMLASparseMetadata(
             num_reqs=cm.num_reqs,
@@ -549,6 +559,10 @@ class FlashMLASparseMetadataBuilder(AttentionMetadataBuilder[FlashMLASparseMetad
             prefill_query_start_loc=prefill_query_start_loc,
             prefill_max_query_len=prefill_max_query_len,
             has_context=has_context,
+            prefill_query_lens_cpu=prefill_query_lens_cpu,
+            prefill_cu_seq_lens_kv=prefill_cu_seq_lens_kv,
+            prefill_max_kv_len=prefill_max_kv_len,
+            prefill_block_table=prefill_block_table,
             fp8_extra_metadata=fp8_extra_metadata,
             fp8_use_mixed_batch=fp8_use_mixed_batch,
         )
