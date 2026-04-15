@@ -311,8 +311,8 @@ class FlashAttentionMLASparseImpl(
 
         attn_out = flash_attn_varlen_func(
             q=q_pe,
-            k=k_pe_cache.unsqueeze(-2),  # Add head dim of 1
-            v=kv_c_cache.unsqueeze(-2),  # Add head dim of 1
+            k=k_pe_cache.reshape(-1, 1, self.qk_rope_head_dim),
+            v=kv_c_cache.reshape(-1, 1, self.kv_lora_rank),
             q_v=q_nope,
             max_seqlen_q=max(attn_metadata.max_query_len, 1),
             cu_seqlens_q=attn_metadata.query_start_loc,
