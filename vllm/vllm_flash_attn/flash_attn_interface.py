@@ -206,6 +206,9 @@ def flash_attn_varlen_func(
     cp_world_size=1,
     cp_rank=0,
     cp_tot_seqused_k=None,
+    # FA4 MLA sparse attention
+    gather_kv_indices=None,
+    min_seqlen_k=None,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in K, V with fewer heads
@@ -373,11 +376,13 @@ def flash_attn_varlen_func(
             q,
             k,
             v,
+            qv=q_v,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
             seqused_k=seqused_k,
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
+            min_seqlen_k=min_seqlen_k,
             page_table=block_table,
             softmax_scale=softmax_scale,
             causal=causal,
@@ -387,6 +392,7 @@ def flash_attn_varlen_func(
             num_splits=num_splits,
             return_lse=return_softmax_lse,
             out=out,
+            gather_kv_indices=gather_kv_indices,
         )
     else:
         raise ValueError(f"Unsupported FA version: {fa_version}")
