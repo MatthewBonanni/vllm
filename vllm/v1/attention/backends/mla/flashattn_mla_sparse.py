@@ -321,6 +321,10 @@ class FlashAttentionMLASparseImpl(
             NUM_TOPK_TOKENS=topk_indices.shape[1],
         )
 
+        # FA4's gather_kv_indices does not support -1 sentinel values;
+        # clamp to 0 to avoid out-of-bounds GPU memory reads.
+        gather_kv_indices.clamp_(min=0)
+
         total_k = k_pe_cache.shape[0] * k_pe_cache.shape[1]
         num_reqs = attn_metadata.num_reqs
         cu_seqlens_k = torch.zeros(num_reqs + 1, dtype=torch.int32, device=q_pe.device)
