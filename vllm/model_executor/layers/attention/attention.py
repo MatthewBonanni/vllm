@@ -202,6 +202,7 @@ class Attention(nn.Module, AttentionLayerBase):
         kv_sharing_target_layer_name: str | None = None,
         attn_backend: type[AttentionBackend] | None = None,
         head_size_v: int | None = None,
+        use_non_causal: bool = False,
         **extra_impl_args,
     ) -> None:
         """
@@ -303,6 +304,7 @@ class Attention(nn.Module, AttentionLayerBase):
                 use_mm_prefix=self.use_mm_prefix,
                 use_per_head_quant_scales=use_per_head_quant_scales,
                 attn_type=attn_type,
+                use_non_causal=use_non_causal,
             )
         else:
             self.attn_backend = attn_backend
