@@ -211,8 +211,7 @@ def test_sparse_backend_decode_correctness(
             "fp8_ds_mla kv-cache dtype"
         )
 
-    supported_block_sizes = backend_cls.get_supported_kernel_block_sizes()
-    if block_size not in supported_block_sizes:
+    if not backend_cls.supports_block_size(block_size):
         pytest.skip(
             f"{backend_cls.get_name()} does not support block_size={block_size}"
         )
@@ -229,6 +228,8 @@ def test_sparse_backend_decode_correctness(
             pytest.skip("FlashAttentionMLASparseBackend requires SM 10.0 or higher")
         if not is_fa_version_supported(4):
             pytest.skip("FlashAttentionMLASparseBackend requires FA4")
+        if tensor_parallel_size > 1:
+            pytest.skip("FA4 MLA sparse kernel requires MQA with 128 query heads")
 
     batch_spec = SPARSE_BACKEND_BATCH_SPECS[batch_name]
     use_fp8_ds_mla_quantization = kv_cache_dtype == "fp8_ds_mla"
@@ -246,7 +247,7 @@ def test_sparse_backend_decode_correctness(
     qk_rope_head_dim = 64
     v_head_dim = 128
     head_size = kv_lora_rank + qk_rope_head_dim
-    topk_tokens = 128
+    topk_tokens = 256
 
     max_seqlen = max(batch_spec.seq_lens)
     total_cache_tokens = sum(batch_spec.seq_lens)

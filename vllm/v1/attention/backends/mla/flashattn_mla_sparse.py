@@ -133,6 +133,18 @@ class FlashAttentionMLASparseBackend(AttentionBackend):
 
             if not hasattr(hf_text_config, "index_topk"):
                 return "FlashAttention MLA Sparse requires model with index_topk config"
+
+            num_q_heads = vllm_config.model_config.get_num_attention_heads(
+                vllm_config.parallel_config
+            )
+            num_kv_heads = vllm_config.model_config.get_num_kv_heads(
+                vllm_config.parallel_config
+            )
+            if num_kv_heads > 0 and num_q_heads // num_kv_heads != 128:
+                return (
+                    "FA4 MLA sparse kernel requires MQA with 128 query heads "
+                    f"per KV head, but got {num_q_heads // num_kv_heads}"
+                )
         return None
 
     @staticmethod
@@ -309,17 +321,21 @@ class FlashAttentionMLASparseImpl(
             NUM_TOPK_TOKENS=topk_indices.shape[1],
         )
 
+        total_k = k_pe_cache.shape[0] * k_pe_cache.shape[1]
+        num_reqs = attn_metadata.num_reqs
+        cu_seqlens_k = torch.zeros(num_reqs + 1, dtype=torch.int32, device=q_pe.device)
+
         attn_out = flash_attn_varlen_func(
             q=q_pe,
-            k=k_pe_cache.reshape(-1, 1, self.qk_rope_head_dim),
-            v=kv_c_cache.reshape(-1, 1, self.kv_lora_rank),
+            k=k_pe_cache.reshape(total_k, 1, self.qk_rope_head_dim),
+            v=kv_c_cache.reshape(total_k, 1, self.kv_lora_rank),
             q_v=q_nope,
             max_seqlen_q=max(attn_metadata.max_query_len, 1),
             cu_seqlens_q=attn_metadata.query_start_loc,
-            max_seqlen_k=attn_metadata.max_seq_len,
-            seqused_k=attn_metadata.seq_lens,
+            max_seqlen_k=total_k,
+            cu_seqlens_k=cu_seqlens_k,
             softmax_scale=self.scale,
-            causal=True,
+            causal=False,
             fa_version=4,
             gather_kv_indices=gather_kv_indices,
             min_seqlen_k=attn_metadata.topk_tokens,

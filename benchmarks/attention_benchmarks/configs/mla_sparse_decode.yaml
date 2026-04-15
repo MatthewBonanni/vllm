@@ -51,6 +51,7 @@ batch_specs:
 backends:
   - FLASHMLA_SPARSE
   - FLASHINFER_MLA_SPARSE
+  - FLASH_ATTN_MLA_SPARSE
 
 device: "cuda:0"
 repeats: 100
