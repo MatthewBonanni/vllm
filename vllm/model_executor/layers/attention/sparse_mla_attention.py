@@ -98,12 +98,12 @@ def _scatter_topk_kernel(
     mask_ptr,
     topk_ptr,
     cu_q_lens_ptr,
+    token_to_req_ptr,
     num_words: tl.constexpr,
     num_topk: tl.constexpr,
     topk_stride: tl.constexpr,
     max_q_len: tl.constexpr,
     BLOCK_TOPK: tl.constexpr,
-    NUM_REQS: tl.constexpr,
 ):
     """Scatter bits at topk positions into a bit-packed int32 mask.
 
@@ -112,10 +112,7 @@ def _scatter_topk_kernel(
     """
     row_idx = tl.program_id(0)
 
-    b: tl.int32 = 0
-    for i in tl.static_range(NUM_REQS):
-        next_start = tl.load(cu_q_lens_ptr + i + 1)
-        b += tl.where(next_start <= row_idx, 1, 0)
+    b = tl.load(token_to_req_ptr + row_idx).to(tl.int32)
 
     q_start = tl.load(cu_q_lens_ptr + b)
     q_local = row_idx - q_start
@@ -157,17 +154,22 @@ def _build_topk_mask(
     cu_q_lens = torch.zeros(B + 1, dtype=torch.int32, device=device)
     torch.cumsum(q_lens_t, dim=0, out=cu_q_lens[1:])
 
+    token_to_req = torch.repeat_interleave(
+        torch.arange(B, dtype=torch.int32, device=device),
+        q_lens_t,
+    )
+
     BLOCK_TOPK = triton.next_power_of_2(num_topk)
     _scatter_topk_kernel[(total_q,)](
         mask,
         topk_packed,
         cu_q_lens,
+        token_to_req,
         num_words=num_words,
         num_topk=num_topk,
         topk_stride=topk_packed.stride(0),
         max_q_len=max_q_len,
         BLOCK_TOPK=BLOCK_TOPK,
-        NUM_REQS=B,
     )
 
     return mask
