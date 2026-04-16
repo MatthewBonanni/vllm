@@ -41,6 +41,7 @@ Sorted alphabetically by GitHub handle:
 - [@robertgshaw2-redhat](https://github.com/robertgshaw2-redhat): Core, distributed, disagg
 - [@ruisearch42](https://github.com/ruisearch42): Pipeline parallelism, Ray Support
 - [@russellb](https://github.com/russellb): Structured output, engine core, security
+- [@sfeng33](https://github.com/sfeng33): Tool use and reasoning parser
 - [@sighingnow](https://github.com/sighingnow): Qwen models, new model support
 - [@simon-mo](https://github.com/simon-mo): Project lead, API entrypoints, community
 - [@tdoublep](https://github.com/tdoublep): State space models
@@ -56,6 +57,7 @@ Sorted alphabetically by GitHub handle:
 - [@zhuohan123](https://github.com/zhuohan123): Project lead, RL integration, numerics
 - [@zou3519](https://github.com/zou3519): Compilation
 - [@BoyuanFeng](https://github.com/BoyuanFeng): Compilation, CUDAGraph
+- [@xuechendi](https://github.com/xuechendi): Intel CPU/XPU integration, KV connector
 
 ### Emeritus Committers
 
@@ -118,7 +120,7 @@ If you have PRs touching the area, please feel free to ping the area owner for r
 - State space models: The state space models implementation in vLLM
     - @tdoublep, @tlrmchlsmth
 - Reasoning and tool calling parsers
-    - @chaunceyjiang, @aarnphm
+    - @chaunceyjiang, @aarnphm, @sfeng33
 
 ### Entrypoints
 
@@ -175,7 +177,7 @@ If you have PRs touching the area, please feel free to ping the area owner for r
 - Plugin Interface: @youkaichao, @Yikun
 - NVIDIA GPU: @pavanimajety
 - AMD GPU: @gshtras, @tjtanaa
-- Intel CPU/GPU: @jikunshang, @bigPYJ1151
+- Intel CPU/GPU: @jikunshang, @bigPYJ1151, @xuechendi
 - Google TPU: @yaochengji
 
 ### Ecosystem Projects
