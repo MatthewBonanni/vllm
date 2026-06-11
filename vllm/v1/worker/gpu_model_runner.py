@@ -6431,10 +6431,23 @@ class GPUModelRunner(
 
                 for mode, descs in capture_descs:
                     profile_descs = descs[:2]
-                    mem_samples: list[int] = []
+                    # Total GPU memory consumed by each capture, measured from
+                    # driver free memory. Includes the graph pool plus one-time
+                    # global side allocations (kernel JIT/autotuning, cuBLAS/
+                    # cuDNN workspaces) triggered the first time a shape is seen.
+                    free_memory_samples: list[int] = []
+                    # Graph pool growth per capture, measured from the caching
+                    # allocator's reserved bytes. Graphs share one pool and run
+                    # one at a time, so the pool only needs to fit the largest
+                    # graph; reserved bytes plateau after it and the marginal of
+                    # each additional (smaller) graph is ~0.
+                    pool_growth_samples: list[int] = []
 
                     for i, desc in enumerate(profile_descs):
-                        mem_before = torch.cuda.mem_get_info()[0]
+                        free_before = torch.cuda.mem_get_info()[0]
+                        reserved_before = torch.accelerator.memory_stats(
+                            self.device
+                        ).get("reserved_bytes.all.current", 0)
                         self._warmup_and_capture(
                             desc,
                             cudagraph_runtime_mode=mode,
@@ -6449,12 +6462,27 @@ class GPUModelRunner(
                         )
                         torch.accelerator.synchronize()
                         free_after = torch.cuda.mem_get_info()[0]
-                        mem_samples.append(mem_before - free_after)
+                        reserved_after = torch.accelerator.memory_stats(
+                            self.device
+                        ).get("reserved_bytes.all.current", 0)
+                        free_memory_samples.append(free_before - free_after)
+                        pool_growth_samples.append(reserved_after - reserved_before)
 
-                    first_capture = mem_samples[0]
-                    # Use at least 1 MiB per graph for driver overhead
+                    # The largest graph's capture establishes the shared pool
+                    # peak and pays the one-time JIT/autotuning costs, so count
+                    # its full free-memory delta once.
+                    first_capture = free_memory_samples[0]
+                    # The only cost that genuinely recurs per graph is the
+                    # marginal growth of the shared pool, so extrapolate the
+                    # pool growth of a second (smaller) graph rather than its
+                    # free-memory delta. The latter re-counts the one-time
+                    # global allocations above for every graph and overestimates
+                    # the pool by ~an order of magnitude (see issue #45178).
+                    # Floor at 1 MiB per graph for CUDA graph executable
+                    # overhead, which the caching allocator does not track.
                     per_graph = max(
-                        mem_samples[1] if len(mem_samples) > 1 else 0, 1 << 20
+                        pool_growth_samples[1] if len(pool_growth_samples) > 1 else 0,
+                        1 << 20,
                     )
 
                     shared_memory_estimate[mode] = first_capture
