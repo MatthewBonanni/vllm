@@ -73,13 +73,6 @@ class AttentionBackend(ABC):
     def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(1)]
 
-    @classmethod
-    def get_supported_kernel_block_sizes_for_config(
-        cls, vllm_config: "VllmConfig"
-    ) -> list[int | MultipleOf]:
-        """Return kernel block sizes for a concrete engine configuration."""
-        return cls.get_supported_kernel_block_sizes()
-
     @staticmethod
     @abstractmethod
     def get_name() -> str:
@@ -163,13 +156,6 @@ class AttentionBackend(ABC):
             return default_block_size
 
         return min(s.base if isinstance(s, MultipleOf) else s for s in supported_sizes)
-
-    @classmethod
-    def get_preferred_block_size_for_config(
-        cls, default_block_size: int, vllm_config: "VllmConfig"
-    ) -> int:
-        """Return the preferred block size for a concrete engine config."""
-        return cls.get_preferred_block_size(default_block_size)
 
     @classmethod
     def is_mla(cls) -> bool:
@@ -801,6 +787,10 @@ class AttentionImplBase(ABC, Generic[T]):
     standard AttentionImpl and MLAAttentionImpl. Does not define a forward
     method - subclasses define their own forward interfaces.
     """
+
+    def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf] | None:
+        """Layer-specific constraints, or None to use the backend's constraints."""
+        return None
 
     # Whether this impl uses a sparse (top-k) attention path. Used by MLA to
     # route between the dense-MHA prefill and sparse-MQA paths.

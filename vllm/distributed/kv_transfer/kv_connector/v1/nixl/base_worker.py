@@ -20,6 +20,7 @@ import numpy as np
 import torch
 import zmq
 
+from vllm.config import get_layers_from_vllm_config
 from vllm.distributed.kv_transfer.kv_connector.utils import (
     BlockIds,
     EngineId,
@@ -67,6 +68,7 @@ from vllm.distributed.parallel_state import (
     get_tensor_model_parallel_world_size,
 )
 from vllm.logger import init_logger
+from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.platforms import current_platform
 from vllm.utils.gpu_sync_debug import gpu_sync_allowed
 from vllm.utils.network_utils import make_zmq_path
@@ -712,8 +714,15 @@ class NixlBaseConnectorWorker:
             )
 
     def _sync_block_size_with_kernel(self) -> None:
-        backends = get_current_attn_backends(self.vllm_config)
-        kernel_block_size = select_common_block_size(self.block_size, backends)
+        layers = get_layers_from_vllm_config(
+            self.vllm_config, cast(type[Any], AttentionLayerBase)
+        )
+        constraints = (
+            list(layers.values())
+            if layers
+            else get_current_attn_backends(self.vllm_config)
+        )
+        kernel_block_size = select_common_block_size(self.block_size, constraints)
         # Number of blocks not accounting for kernel block mismatches
         self._logical_num_blocks = self.num_blocks
         if self.block_size != kernel_block_size:

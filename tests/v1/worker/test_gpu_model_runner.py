@@ -312,6 +312,68 @@ def test_select_common_block_size_uses_largest_shared_int():
     assert selected_size == 64
 
 
+@pytest.mark.parametrize(
+    "version,head_size,kv_cache_dtype,expected,expected_sliding_block",
+    [(3, 256, "fp8", 128, 16), (4, 512, "fp8", 64, 64), (4, 512, "auto", 128, 16)],
+)
+def test_kernel_pages_follow_loaded_flash_attn_layer(
+    monkeypatch, version, head_size, kv_cache_dtype, expected, expected_sliding_block
+):
+    """A model-wide FP8/512 constraint must not override FA3 or skip-quant layers."""
+    from vllm.model_executor.layers.attention import Attention
+    from vllm.v1.attention.backend import AttentionType
+    from vllm.v1.attention.backends import flash_attn
+    from vllm.v1.worker.utils import prepare_kernel_block_sizes
+
+    with monkeypatch.context() as m:
+        platform = Mock()
+        platform.is_device_capability_family.side_effect = lambda family: family == 90
+        m.setattr(flash_attn, "current_platform", platform)
+        m.setattr(flash_attn, "get_current_vllm_config_or_none", lambda: None)
+        m.setattr(flash_attn, "get_flash_attn_version", lambda **kwargs: version)
+        m.setattr(flash_attn, "uses_fa4_hd256_kernel", lambda *args: False)
+        m.setattr(
+            flash_attn, "flash_attn_supports_kv_cache_dtype", lambda *a, **k: True
+        )
+        impl = flash_attn.FlashAttentionImpl(
+            num_heads=4,
+            head_size=head_size,
+            scale=head_size**-0.5,
+            num_kv_heads=1,
+            alibi_slopes=None,
+            sliding_window=None,
+            kv_cache_dtype=kv_cache_dtype,
+        )
+
+    layer = Attention.__new__(Attention)
+    torch.nn.Module.__init__(layer)
+    layer.impl = impl
+    # The model-wide backend answer is 64 for every layer.
+    backend = _make_mock_backend_for_kernel_block_size([64])
+    layer.attn_backend = backend
+    spec = FullAttentionSpec(
+        block_size=128, num_kv_heads=1, head_size=head_size, dtype=torch.float16
+    )
+    config = SimpleNamespace(
+        compilation_config=SimpleNamespace(static_forward_context={"layer": layer})
+    )
+    cache = SimpleNamespace(kv_cache_groups=[SimpleNamespace(kv_cache_spec=spec)])
+    groups = [[SimpleNamespace(backend=backend, layer_names=["layer"])]]
+
+    assert prepare_kernel_block_sizes(cache, groups, config) == [expected]
+
+    layer.attn_type = AttentionType.DECODER
+    layer.sliding_window = 128
+    layer.head_size = layer.head_size_v = head_size
+    layer.num_kv_heads = 1
+    layer.kv_cache_dtype = kv_cache_dtype
+    layer.kv_cache_torch_dtype = torch.float16
+    backend.is_mla = lambda: False
+    backend.customize_spec = lambda spec: spec
+    config.cache_config = SimpleNamespace(block_size=128, skip_page_size_padded=None)
+    assert layer.get_kv_cache_spec(config).block_size == expected_sliding_block
+
+
 def test_select_common_block_size_accepts_rocm_sparse_block_size_16(monkeypatch):
     monkeypatch.setattr(current_platform, "is_rocm", lambda: True)
 

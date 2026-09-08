@@ -42,6 +42,7 @@ from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionMetadata,
     AttentionType,
+    MultipleOf,
 )
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 from vllm.v1.attention.selector import get_attn_backend
@@ -99,8 +100,7 @@ def should_load_quant_weights(quant_method: QuantizeMethodBase | None) -> bool:
 
 
 def _largest_kernel_block_within(
-    attn_backend: "type[AttentionBackend]",
-    vllm_config: VllmConfig,
+    sizes: list[int | MultipleOf],
     per_token_bytes: int,
     page_budget: int | None,
     fallback: int,
@@ -113,9 +113,6 @@ def _largest_kernel_block_within(
     Falls back to the smallest supported block when ``page_budget`` is None (no padding
     — the block is handled by ``unify``'s integer scaling instead) or nothing fits.
     """
-    from vllm.v1.attention.backend import MultipleOf
-
-    sizes = attn_backend.get_supported_kernel_block_sizes_for_config(vllm_config)
     candidates = [s for s in sizes if isinstance(s, int)]
     if not candidates:
         candidates = [s.base for s in sizes if isinstance(s, MultipleOf)]
@@ -603,6 +600,12 @@ class Attention(nn.Module, AttentionLayerBase):
     def get_attn_backend(self) -> type[AttentionBackend]:
         return self.attn_backend
 
+    def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf]:
+        sizes = self.impl.get_supported_kernel_block_sizes()
+        if sizes is not None:
+            return sizes
+        return super().get_supported_kernel_block_sizes()
+
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec | None:
         # Block size may get updated after model loading, refresh it
         block_size = vllm_config.cache_config.block_size
@@ -641,8 +644,7 @@ class Attention(nn.Module, AttentionLayerBase):
                 )
             ).real_page_size_bytes
             sw_block_size = _largest_kernel_block_within(
-                self.attn_backend,
-                vllm_config,
+                self.get_supported_kernel_block_sizes(),
                 sw_per_token,
                 shared_page,
                 block_size,

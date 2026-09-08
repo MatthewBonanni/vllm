@@ -5,14 +5,15 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product as iprod
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
 
-from vllm.config import CacheConfig, VllmConfig
+from vllm.config import CacheConfig, VllmConfig, get_layers_from_vllm_config
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import Attention
+from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.mamba.mamba_mixer2 import share_replayssm_ring_trackers
 from vllm.model_executor.layers.utils import warmup_rocm_skinny_gemm_workspaces
 from vllm.model_executor.models.interfaces import MultiModalEmbeddings
@@ -327,7 +328,7 @@ class AttentionGroup:
 
 def select_common_block_size(
     kv_manager_block_size: int,
-    backends: list[type[AttentionBackend]],
+    backends: Sequence[type[AttentionBackend] | AttentionLayerBase],
 ) -> int:
     """
     Select a block size that is supported by all backends and is a factor of
@@ -338,7 +339,7 @@ def select_common_block_size(
 
     Args:
         kv_manager_block_size: Block size of KV cache.
-        backends: List of attention backend classes.
+        backends: Loaded attention layers, or backend classes before model loading.
 
     Returns:
         The selected block size.
@@ -348,7 +349,8 @@ def select_common_block_size(
     """
 
     def block_size_is_supported(
-        backends: list[type[AttentionBackend]], block_size: int
+        backends: Sequence[type[AttentionBackend] | AttentionLayerBase],
+        block_size: int,
     ) -> bool:
         """Check if the block size is supported by all backends."""
         for backend in backends:
@@ -460,7 +462,9 @@ def allocate_kv_cache(
 
 
 def prepare_kernel_block_sizes(
-    kv_cache_config: KVCacheConfig, attn_groups: list[list[AttentionGroup]]
+    kv_cache_config: KVCacheConfig,
+    attn_groups: list[list[AttentionGroup]],
+    vllm_config: VllmConfig,
 ) -> list[int]:
     """
     Generate kernel_block_sizes that matches each block_size.
@@ -472,6 +476,7 @@ def prepare_kernel_block_sizes(
     Args:
         kv_cache_config: The KV cache configuration.
         attn_groups: Attention groups indexed by KV cache group id.
+        vllm_config: Configuration containing the loaded attention layers.
 
     Returns:
         List of kernel block sizes for each cache group.
@@ -488,9 +493,16 @@ def prepare_kernel_block_sizes(
         if isinstance(kv_cache_spec, AttentionSpec):
             # This is an attention backend that supports virtual block splitting.
             kv_manager_block_size = kv_cache_group.kv_cache_spec.block_size
-            group_backends = [g.backend for g in attn_groups[kv_cache_gid]]
+            layer_names = [
+                name
+                for group in attn_groups[kv_cache_gid]
+                for name in group.layer_names
+            ]
+            layers = get_layers_from_vllm_config(
+                vllm_config, cast(type[Any], AttentionLayerBase), layer_names
+            )
             selected_kernel_size = select_common_block_size(
-                kv_manager_block_size, group_backends
+                kv_manager_block_size, list(layers.values())
             )
             kernel_block_sizes.append(selected_kernel_size)
         elif isinstance(kv_cache_spec, MambaSpec):

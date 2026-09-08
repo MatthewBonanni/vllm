@@ -7518,7 +7518,7 @@ class GPUModelRunner(
         # kernel_block_size 64 and split the 256-token-block to 4 blocks with 64
         # tokens each.
         kernel_block_sizes = prepare_kernel_block_sizes(
-            kv_cache_config, self.attn_groups
+            kv_cache_config, self.attn_groups, self.vllm_config
         )
         self._kernel_block_sizes = kernel_block_sizes
 

@@ -8,7 +8,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 import msgspec
@@ -18,7 +18,7 @@ import zmq
 import zmq.asyncio
 
 from vllm import envs
-from vllm.config import VllmConfig
+from vllm.config import VllmConfig, get_layers_from_vllm_config
 from vllm.distributed.kv_transfer.kv_connector.utils import (
     EngineId,
     TransferTopology,
@@ -45,6 +45,7 @@ from vllm.distributed.parallel_state import (
 )
 from vllm.forward_context import ForwardContext
 from vllm.logger import init_logger
+from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.models.utils import extract_layer_index
 from vllm.platforms import current_platform
 from vllm.utils.math_utils import cdiv
@@ -1048,8 +1049,15 @@ class MooncakeConnectorWorker:
         # and draft model may use different attention backends with different
         # physical block sizes. Pick the common (smallest) block size so that
         # KV-cache registration and transfer work correctly for both models.
-        backends = get_current_attn_backends(self.vllm_config)
-        kernel_block_size = select_common_block_size(self.block_size, backends)
+        layers = get_layers_from_vllm_config(
+            self.vllm_config, cast(type[Any], AttentionLayerBase)
+        )
+        constraints = (
+            list(layers.values())
+            if layers
+            else get_current_attn_backends(self.vllm_config)
+        )
+        kernel_block_size = select_common_block_size(self.block_size, constraints)
         if self.block_size != kernel_block_size:
             logger.info_once(
                 "User-specified logical block size (%s) does not match"

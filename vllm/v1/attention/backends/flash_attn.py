@@ -143,16 +143,6 @@ class FlashAttentionBackend(AttentionBackend):
             return [block_size]
         return [MultipleOf(16)]
 
-    @classmethod
-    def get_supported_kernel_block_sizes_for_config(
-        cls, vllm_config: VllmConfig
-    ) -> list[int | MultipleOf]:
-        if block_size := cls._get_sm90_fa4_fp8_kv_block_size(vllm_config):
-            return [block_size]
-        if block_size := cls._get_fa4_hd256_block_size(vllm_config):
-            return [block_size]
-        return [MultipleOf(16)]
-
     forward_includes_kv_cache_update: bool = False
 
     @classmethod
@@ -160,18 +150,6 @@ class FlashAttentionBackend(AttentionBackend):
         if block_size := cls._get_sm90_fa4_fp8_kv_block_size():
             return max(default_block_size, block_size)
         if block_size := cls._get_fa4_hd256_block_size():
-            return max(default_block_size, block_size)
-        if current_platform.is_xpu():
-            return max(default_block_size, 64)
-        return super().get_preferred_block_size(default_block_size)
-
-    @classmethod
-    def get_preferred_block_size_for_config(
-        cls, default_block_size: int, vllm_config: VllmConfig
-    ) -> int:
-        if block_size := cls._get_sm90_fa4_fp8_kv_block_size(vllm_config):
-            return max(default_block_size, block_size)
-        if block_size := cls._get_fa4_hd256_block_size(vllm_config):
             return max(default_block_size, block_size)
         if current_platform.is_xpu():
             return max(default_block_size, 64)
@@ -992,13 +970,13 @@ class FlashAttentionImpl(AttentionImpl):
         # FA4's SM90 FP8-KV path consumes native FP16/BF16 Q and dequantizes
         # FP8 K/V in-kernel. Other FA4 paths (notably SM100) still require Q,
         # K, and V to have the same FP8 dtype.
-        uses_sm90_fa4_fp8_kv_dequant = (
+        self.uses_sm90_fa4_fp8_kv_dequant = (
             self.vllm_flash_attn_version == 4
             and current_platform.is_device_capability_family(90)
             and self.kv_cache_dtype in ("fp8", "fp8_e4m3")
         )
         self.supports_quant_query_input = flash_attn_supports_quant_query_input() and (
-            not uses_sm90_fa4_fp8_kv_dequant
+            not self.uses_sm90_fa4_fp8_kv_dequant
         )
 
         dcp_a2a = (
@@ -1015,6 +993,13 @@ class FlashAttentionImpl(AttentionImpl):
             self._dcp_max_num_tokens = (
                 vllm_config.scheduler_config.max_num_batched_tokens
             )
+
+    def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf]:
+        if self.uses_sm90_fa4_fp8_kv_dequant:
+            return [64]
+        if self.fa4_hd256:
+            return [FA4_HD256_PAGE_SIZE]
+        return [MultipleOf(16)]
 
     def forward(
         self,
