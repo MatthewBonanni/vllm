@@ -20,6 +20,7 @@ from vllm.utils.platform_utils import num_compute_units
 from vllm.utils.torch_utils import is_quantized_kv_cache
 from vllm.v1.attention.backend import (
     AttentionCGSupport,
+    AttentionImplBase,
     AttentionLayer,
     AttentionType,
     MultipleOf,
@@ -46,7 +47,9 @@ class CutlassMLABackend(MLACommonBackend):
     ]
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         return [128]
 
     @staticmethod

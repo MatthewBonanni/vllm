@@ -28,6 +28,7 @@ from vllm.utils.platform_utils import num_compute_units
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
+    AttentionImplBase,
     AttentionMetadataBuilder,
     CommonAttentionMetadata,
     MultipleOf,
@@ -245,7 +246,9 @@ class DeepseekV32IndexerBackend(AttentionBackend):
         return "DEEPSEEK_V32_INDEXER"
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         return [1, MultipleOf(16)] if current_platform.is_rocm() else [64]
 
     @classmethod
@@ -273,7 +276,9 @@ class KpoolTailBackend(DeepseekV32IndexerBackend):
         return []
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         return [MultipleOf(1)]
 
     @staticmethod
@@ -293,7 +298,9 @@ class DeepseekV4IndexerBackend(DeepseekV32IndexerBackend):
         return (KVCacheLayout.BLHNC, KVCacheLayout.BLNHC)
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         return [256]
 
 

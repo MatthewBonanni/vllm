@@ -601,10 +601,7 @@ class Attention(nn.Module, AttentionLayerBase):
         return self.attn_backend
 
     def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf]:
-        sizes = self.impl.get_supported_kernel_block_sizes()
-        if sizes is not None:
-            return sizes
-        return super().get_supported_kernel_block_sizes()
+        return self.attn_backend.get_supported_kernel_block_sizes(self.impl)
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec | None:
         # Block size may get updated after model loading, refresh it

@@ -63,6 +63,7 @@ from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
     AttentionImpl,
+    AttentionImplBase,
     AttentionMetadataBuilder,
     AttentionType,
     CommonAttentionMetadata,
@@ -423,7 +424,9 @@ class FlashInferBackend(AttentionBackend):
     ]
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         # Page sizes >= 128 only run on the trtllm-gen dynamic kernel (GQA/MQA
         # on Blackwell); advertise them only when usable so selection never
         # picks a large kernel block we cannot serve.

@@ -70,7 +70,10 @@ class AttentionBackend(ABC):
     forward_includes_kv_cache_update: bool = True
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: "AttentionImplBase | None" = None,
+    ) -> list[int | MultipleOf]:
+        """Supported kernel pages, using the selected implementation when available."""
         return [MultipleOf(1)]
 
     @staticmethod
@@ -787,10 +790,6 @@ class AttentionImplBase(ABC, Generic[T]):
     standard AttentionImpl and MLAAttentionImpl. Does not define a forward
     method - subclasses define their own forward interfaces.
     """
-
-    def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf] | None:
-        """Layer-specific constraints, or None to use the backend's constraints."""
-        return None
 
     # Whether this impl uses a sparse (top-k) attention path. Used by MLA to
     # route between the dense-MHA prefill and sparse-MQA paths.

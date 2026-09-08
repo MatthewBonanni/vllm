@@ -32,6 +32,7 @@ from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
     AttentionImpl,
+    AttentionImplBase,
     AttentionLayer,
     AttentionMetadata,
     AttentionMetadataBuilder,
@@ -183,7 +184,9 @@ class B12xPagedAttentionBackend(AttentionBackend):
         return B12xPagedMetadataBuilder
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         return list(_B12X_SUPPORTED_PAGE_SIZES)
 
     @classmethod

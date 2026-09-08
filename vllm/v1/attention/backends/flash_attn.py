@@ -20,6 +20,7 @@ from vllm.utils.torch_utils import (
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionImpl,
+    AttentionImplBase,
     AttentionType,
     MultipleOf,
 )
@@ -135,7 +136,17 @@ class FlashAttentionBackend(AttentionBackend):
         return None
 
     @classmethod
-    def get_supported_kernel_block_sizes(cls) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        cls,
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
+        if impl is not None:
+            assert isinstance(impl, FlashAttentionImpl)
+            if impl.uses_sm90_fa4_fp8_kv_dequant:
+                return [64]
+            if impl.fa4_hd256:
+                return [FA4_HD256_PAGE_SIZE]
+            return [MultipleOf(16)]
         if block_size := cls._get_sm90_fa4_fp8_kv_block_size():
             return [block_size]
         if block_size := cls._get_fa4_hd256_block_size():
@@ -993,13 +1004,6 @@ class FlashAttentionImpl(AttentionImpl):
             self._dcp_max_num_tokens = (
                 vllm_config.scheduler_config.max_num_batched_tokens
             )
-
-    def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf]:
-        if self.uses_sm90_fa4_fp8_kv_dequant:
-            return [64]
-        if self.fa4_hd256:
-            return [FA4_HD256_PAGE_SIZE]
-        return [MultipleOf(16)]
 
     def forward(
         self,

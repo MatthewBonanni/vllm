@@ -38,6 +38,7 @@ from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
     AttentionImpl,
+    AttentionImplBase,
     AttentionMetadataBuilder,
     AttentionType,
     CommonAttentionMetadata,
@@ -150,7 +151,9 @@ class FlexAttentionBackend(AttentionBackend):
         return []
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         return [MultipleOf(16)]
 
 

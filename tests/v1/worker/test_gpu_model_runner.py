@@ -349,7 +349,10 @@ def test_kernel_pages_follow_loaded_flash_attn_layer(
     torch.nn.Module.__init__(layer)
     layer.impl = impl
     # The model-wide backend answer is 64 for every layer.
-    backend = _make_mock_backend_for_kernel_block_size([64])
+    backend = flash_attn.FlashAttentionBackend
+    monkeypatch.setattr(
+        backend, "_get_sm90_fa4_fp8_kv_block_size", staticmethod(lambda: 64)
+    )
     layer.attn_backend = backend
     spec = FullAttentionSpec(
         block_size=128, num_kv_heads=1, head_size=head_size, dtype=torch.float16
@@ -368,8 +371,6 @@ def test_kernel_pages_follow_loaded_flash_attn_layer(
     layer.num_kv_heads = 1
     layer.kv_cache_dtype = kv_cache_dtype
     layer.kv_cache_torch_dtype = torch.float16
-    backend.is_mla = lambda: False
-    backend.customize_spec = lambda spec: spec
     config.cache_config = SimpleNamespace(block_size=128, skip_page_size_padded=None)
     assert layer.get_kv_cache_spec(config).block_size == expected_sliding_block
 

@@ -37,6 +37,7 @@ from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
     AttentionImpl,
+    AttentionImplBase,
     AttentionLayer,
     AttentionMetadata,
     AttentionMetadataBuilder,
@@ -161,7 +162,9 @@ class TurboQuantAttentionBackend(AttentionBackend):
         return (KVCacheLayout.LBNHC,)
 
     @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes(
+        impl: AttentionImplBase | None = None,
+    ) -> list[int | MultipleOf]:
         return [16, 32, 64, 128]
 
     @classmethod
