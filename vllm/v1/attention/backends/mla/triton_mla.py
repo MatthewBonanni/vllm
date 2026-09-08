@@ -21,7 +21,6 @@ from vllm.triton_utils import triton
 from vllm.utils.torch_utils import is_quantized_kv_cache
 from vllm.v1.attention.backend import (
     AttentionCGSupport,
-    AttentionImplBase,
     AttentionLayer,
     AttentionType,
     MultipleOf,
@@ -143,9 +142,7 @@ class TritonMLABackend(MLACommonBackend):
         return []
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(16)]
 
     @classmethod

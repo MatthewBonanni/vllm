@@ -24,7 +24,6 @@ from vllm.platforms import current_platform
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
-    AttentionImplBase,
     AttentionMetadataBuilder,
     CommonAttentionMetadata,
     MultipleOf,
@@ -65,9 +64,7 @@ class CompressorBackend(AttentionBackend):
         return "CompressorBackend"
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(1)]
 
     @classmethod

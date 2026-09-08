@@ -56,6 +56,25 @@ class MultipleOf:
         self.base = base
 
 
+@dataclass(frozen=True)
+class KernelPageRequirements:
+    supported_sizes: tuple[int | MultipleOf, ...]
+
+    def supports(self, block_size: int) -> bool:
+        return any(
+            block_size % size.base == 0
+            if isinstance(size, MultipleOf)
+            else block_size == size
+            for size in self.supported_sizes
+        )
+
+
+@dataclass(frozen=True)
+class AttentionKernel:
+    impl: "AttentionImplBase"
+    page_requirements: KernelPageRequirements
+
+
 class AttentionBackend(ABC):
     """Abstract class for attention backends."""
 
@@ -70,11 +89,15 @@ class AttentionBackend(ABC):
     forward_includes_kv_cache_update: bool = True
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: "AttentionImplBase | None" = None,
-    ) -> list[int | MultipleOf]:
-        """Supported kernel pages, using the selected implementation when available."""
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(1)]
+
+    @classmethod
+    def create_kernel(cls, *args: Any, **kwargs: Any) -> "AttentionKernel":
+        impl = cls.get_impl_cls()(*args, **kwargs)
+        return AttentionKernel(
+            impl, KernelPageRequirements(tuple(cls.get_supported_kernel_block_sizes()))
+        )
 
     @staticmethod
     @abstractmethod

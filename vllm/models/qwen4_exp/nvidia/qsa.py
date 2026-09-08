@@ -33,7 +33,6 @@ from vllm.utils.torch_utils import (
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
-    AttentionImplBase,
     AttentionType,
     MultipleOf,
 )
@@ -72,9 +71,7 @@ class Qwen4ExpQSAFlashAttentionBackend(FlashAttentionBackend):
         return "QWEN4_EXP_QSA_TRITON"
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         # QSA consumes manager pages directly and does not use FA4 paged attention.
         return [MultipleOf(16)]
 

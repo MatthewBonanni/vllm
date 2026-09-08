@@ -24,7 +24,6 @@ from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
     AttentionImpl,
-    AttentionImplBase,
     AttentionLayer,
     AttentionMetadataBuilder,
     AttentionType,
@@ -305,9 +304,7 @@ class TritonAttentionBackend(AttentionBackend):
     ]
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(16)]
 
     @classmethod

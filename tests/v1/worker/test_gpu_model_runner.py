@@ -281,15 +281,12 @@ def _is_req_state_block_table_match(model_runner, req_id: str) -> bool:
     ).all()
 
 
-def _make_mock_backend_for_kernel_block_size(
+def _make_kernel_page_requirements(
     supported_sizes: list[int | MultipleOf],
 ):
-    class _MockBackend:
-        @staticmethod
-        def get_supported_kernel_block_sizes():
-            return supported_sizes
+    from vllm.v1.attention.backend import KernelPageRequirements
 
-    return _MockBackend()
+    return KernelPageRequirements(tuple(supported_sizes))
 
 
 def _make_kv_cache_spec() -> FullAttentionSpec:
@@ -297,16 +294,16 @@ def _make_kv_cache_spec() -> FullAttentionSpec:
 
 
 def test_select_common_block_size_prefers_manager_block_size():
-    backend_a = _make_mock_backend_for_kernel_block_size([MultipleOf(32)])
-    backend_b = _make_mock_backend_for_kernel_block_size([64, MultipleOf(16)])
+    backend_a = _make_kernel_page_requirements([MultipleOf(32)])
+    backend_b = _make_kernel_page_requirements([64, MultipleOf(16)])
 
     selected_size = select_common_block_size(128, [backend_a, backend_b])
     assert selected_size == 128
 
 
 def test_select_common_block_size_uses_largest_shared_int():
-    backend_a = _make_mock_backend_for_kernel_block_size([128, 64])
-    backend_b = _make_mock_backend_for_kernel_block_size([64, 32])
+    backend_a = _make_kernel_page_requirements([128, 64])
+    backend_b = _make_kernel_page_requirements([64, 32])
 
     selected_size = select_common_block_size(256, [backend_a, backend_b])
     assert selected_size == 64
@@ -335,7 +332,7 @@ def test_kernel_pages_follow_loaded_flash_attn_layer(
         m.setattr(
             flash_attn, "flash_attn_supports_kv_cache_dtype", lambda *a, **k: True
         )
-        impl = flash_attn.FlashAttentionImpl(
+        kernel = flash_attn.FlashAttentionBackend.create_kernel(
             num_heads=4,
             head_size=head_size,
             scale=head_size**-0.5,
@@ -347,7 +344,8 @@ def test_kernel_pages_follow_loaded_flash_attn_layer(
 
     layer = Attention.__new__(Attention)
     torch.nn.Module.__init__(layer)
-    layer.impl = impl
+    layer.impl = kernel.impl
+    layer.kernel_page_requirements = kernel.page_requirements
     # The model-wide backend answer is 64 for every layer.
     backend = flash_attn.FlashAttentionBackend
     monkeypatch.setattr(
@@ -375,12 +373,68 @@ def test_kernel_pages_follow_loaded_flash_attn_layer(
     assert layer.get_kv_cache_spec(config).block_size == expected_sliding_block
 
 
+@pytest.mark.parametrize("uniform_transfer_split", [False, True])
+def test_transfer_groups_allocate_the_published_split_ratio(
+    monkeypatch, uniform_transfer_split
+):
+    """FA3 must split its larger logical pages to match FA4 transfer block IDs."""
+    from vllm.distributed import kv_transfer
+    from vllm.model_executor.layers.attention import Attention
+    from vllm.v1.attention.backend import KernelPageRequirements
+    from vllm.v1.kv_cache_interface import compute_layer_kv_cache_shape_bytes
+    from vllm.v1.worker.utils import prepare_kernel_block_sizes
+
+    monkeypatch.setattr(kv_transfer, "has_kv_transfer_group", lambda: True)
+    monkeypatch.setattr(
+        kv_transfer,
+        "get_kv_transfer_group",
+        lambda: SimpleNamespace(requires_uniform_transfer_split=uniform_transfer_split),
+    )
+    specs = [
+        FullAttentionSpec(
+            block_size=128, num_kv_heads=1, head_size=512, dtype=torch.float16
+        ),
+        FullAttentionSpec(
+            block_size=256, num_kv_heads=1, head_size=256, dtype=torch.float16
+        ),
+    ]
+    layers = {}
+    for name, sizes in (("full", (64,)), ("sliding", (MultipleOf(16),))):
+        layer = Attention.__new__(Attention)
+        torch.nn.Module.__init__(layer)
+        layer.kernel_page_requirements = KernelPageRequirements(sizes)
+        layers[name] = layer
+    config = SimpleNamespace(
+        compilation_config=SimpleNamespace(static_forward_context=layers),
+        cache_config=SimpleNamespace(block_size=128),
+    )
+    cache = SimpleNamespace(
+        kv_cache_groups=[
+            SimpleNamespace(kv_cache_spec=spec, enable_kv_transfer=True)
+            for spec in specs
+        ]
+    )
+    groups = [[SimpleNamespace(layer_names=[name])] for name in layers]
+    sizes = prepare_kernel_block_sizes(cache, groups, config)
+    if uniform_transfer_split:
+        assert sizes == [64, 128]
+        assert cache.allocation_plan.transfer_block_ratio == 2
+        for spec, size in zip(specs, cache.allocation_plan.kernel_block_sizes):
+            assert compute_layer_kv_cache_shape_bytes(spec, 8, size)[0] == 16
+    else:
+        assert sizes == [64, 256]
+        assert cache.allocation_plan.transfer_block_ratio == 1
+
+
 def test_select_common_block_size_accepts_rocm_sparse_block_size_16(monkeypatch):
     monkeypatch.setattr(current_platform, "is_rocm", lambda: True)
 
     selected_size = select_common_block_size(
         16,
-        [DeepseekV32IndexerBackend, ROCMAiterMLASparseBackend],
+        [
+            _make_kernel_page_requirements(backend.get_supported_kernel_block_sizes())
+            for backend in (DeepseekV32IndexerBackend, ROCMAiterMLASparseBackend)
+        ],
     )
     assert selected_size == 16
 
@@ -465,8 +519,8 @@ def test_sample_tokens_skips_pp_group_lookup_without_async_scheduling(
 
 
 def test_select_common_block_size_no_valid_option():
-    backend_a = _make_mock_backend_for_kernel_block_size([64])
-    backend_b = _make_mock_backend_for_kernel_block_size([MultipleOf(16)])
+    backend_a = _make_kernel_page_requirements([64])
+    backend_b = _make_kernel_page_requirements([MultipleOf(16)])
 
     with pytest.raises(ValueError):
         select_common_block_size(48, [backend_a, backend_b])

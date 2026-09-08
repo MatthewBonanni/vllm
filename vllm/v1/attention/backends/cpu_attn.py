@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
-    from vllm.v1.attention.backend import AttentionImplBase
+    from vllm.config.cache import CacheDType
+
 import torch
 
 from vllm import _custom_ops as ops
@@ -14,7 +15,6 @@ from vllm.config import (
     VllmConfig,
     get_layers_from_vllm_config,
 )
-from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import Attention
 from vllm.platforms import CpuArchEnum, current_platform
@@ -57,9 +57,7 @@ class CPUAttentionBackend(AttentionBackend):
     ]
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(32)]
 
     @classmethod

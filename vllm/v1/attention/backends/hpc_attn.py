@@ -24,7 +24,6 @@ from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
     AttentionImpl,
-    AttentionImplBase,
     AttentionMetadata,
     AttentionMetadataBuilder,
     AttentionType,
@@ -289,9 +288,7 @@ class HpcAttentionBackend(AttentionBackend):
     forward_includes_kv_cache_update: bool = True
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [64]
 
     @staticmethod

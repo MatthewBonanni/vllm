@@ -7546,7 +7546,10 @@ class GPUModelRunner(
 
         if has_kv_transfer_group() and not is_profiling:
             kv_transfer_group = get_kv_transfer_group()
-            kv_transfer_group.register_kv_caches(kv_caches)
+            assert self.kv_cache_config.allocation_plan is not None
+            kv_transfer_group.register_kv_cache_layout(
+                kv_caches, self.kv_cache_config.allocation_plan
+            )
             kv_transfer_group.set_host_xfer_buffer_ops(copy_kv_blocks)
 
     def get_routed_experts(

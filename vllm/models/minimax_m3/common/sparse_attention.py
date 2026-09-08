@@ -27,7 +27,6 @@ from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.models.minimax_m3.common.ops.sparse_attn import SPARSE_BLOCK_SIZE
 from vllm.platforms import current_platform
-from vllm.v1.attention.backend import AttentionImplBase
 
 # AMD/ROCm uses the gfx942/gfx950-optimized block-sparse kernels in amd.ops;
 # every other platform uses the generic common.ops implementation.
@@ -44,6 +43,7 @@ else:
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
+    AttentionImplBase,
     AttentionLayer,
     AttentionMetadata,
     AttentionMetadataBuilder,
@@ -150,9 +150,7 @@ class MiniMaxM3SparseBackend(AttentionBackend):
         return [128]
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         # Page size == sparse block size (one sparse block per KV page).
         return [128]
 

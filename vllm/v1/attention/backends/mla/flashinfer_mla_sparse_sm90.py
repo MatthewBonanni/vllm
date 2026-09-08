@@ -46,7 +46,6 @@ from vllm.platforms.interface import DeviceCapability
 from vllm.utils.flashinfer import has_flashinfer_sm90_nope_mla
 from vllm.v1.attention.backend import (
     AttentionBackend,
-    AttentionImplBase,
     AttentionLayer,
     CommonAttentionMetadata,
     MLAAttentionImpl,
@@ -75,9 +74,7 @@ class FlashInferMLASparseSM90Backend(AttentionBackend):
     ]
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(64)]
 
     @staticmethod

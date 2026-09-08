@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import torch
@@ -100,7 +101,7 @@ def should_load_quant_weights(quant_method: QuantizeMethodBase | None) -> bool:
 
 
 def _largest_kernel_block_within(
-    sizes: list[int | MultipleOf],
+    sizes: Sequence[int | MultipleOf],
     per_token_bytes: int,
     page_budget: int | None,
     fallback: int,
@@ -412,8 +413,7 @@ class Attention(nn.Module, AttentionLayerBase):
             if block_n is not None:
                 extra_impl_args.setdefault("block_n", block_n)
 
-        impl_cls = self.attn_backend.get_impl_cls()
-        self.impl = impl_cls(  # type: ignore[assignment]  # impl_cls always returns an AttentionImpl subclass
+        kernel = self.attn_backend.create_kernel(
             num_heads,
             head_size,
             scale,
@@ -426,6 +426,8 @@ class Attention(nn.Module, AttentionLayerBase):
             kv_sharing_target_layer_name,
             **extra_impl_args,
         )
+        self.impl = kernel.impl  # type: ignore[assignment]
+        self.kernel_page_requirements = kernel.page_requirements
         self.backend = AttentionBackendEnum[self.attn_backend.get_name()]
         self.dtype = dtype
 
@@ -600,9 +602,6 @@ class Attention(nn.Module, AttentionLayerBase):
     def get_attn_backend(self) -> type[AttentionBackend]:
         return self.attn_backend
 
-    def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf]:
-        return self.attn_backend.get_supported_kernel_block_sizes(self.impl)
-
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec | None:
         # Block size may get updated after model loading, refresh it
         block_size = vllm_config.cache_config.block_size
@@ -641,7 +640,7 @@ class Attention(nn.Module, AttentionLayerBase):
                 )
             ).real_page_size_bytes
             sw_block_size = _largest_kernel_block_within(
-                self.get_supported_kernel_block_sizes(),
+                self.kernel_page_requirements.supported_sizes,
                 sw_per_token,
                 shared_page,
                 block_size,

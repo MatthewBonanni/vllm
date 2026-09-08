@@ -23,7 +23,6 @@ from vllm.utils.math_utils import cdiv, next_power_of_2
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
-    AttentionImplBase,
     AttentionMetadataBuilder,
     CommonAttentionMetadata,
     MultipleOf,
@@ -130,9 +129,7 @@ class DeepseekSparseSWABackend(AttentionBackend):
         return "DEEPSEEK_SPARSE_SWA"
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [MultipleOf(64)]
 
     @classmethod

@@ -3,11 +3,16 @@
 """Base class for attention-like layers."""
 
 from abc import ABC, abstractmethod
+from functools import cached_property
 
 import torch
 
 from vllm.config import VllmConfig
-from vllm.v1.attention.backend import AttentionBackend, AttentionImpl, MultipleOf
+from vllm.v1.attention.backend import (
+    AttentionBackend,
+    AttentionImpl,
+    KernelPageRequirements,
+)
 from vllm.v1.kv_cache_interface import KVCacheSpec
 
 
@@ -36,8 +41,11 @@ class AttentionLayerBase(ABC):
         """Get the attention backend class for this layer."""
         pass
 
-    def get_supported_kernel_block_sizes(self) -> list[int | MultipleOf]:
-        return self.get_attn_backend().get_supported_kernel_block_sizes()
+    @cached_property
+    def kernel_page_requirements(self) -> KernelPageRequirements:
+        return KernelPageRequirements(
+            tuple(self.get_attn_backend().get_supported_kernel_block_sizes())
+        )
 
     @abstractmethod
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec | None:

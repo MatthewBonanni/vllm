@@ -21,7 +21,6 @@ from vllm.utils.torch_utils import np_to_pinned_tensor
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
-    AttentionImplBase,
     AttentionLayer,
     AttentionMetadata,
     AttentionMetadataBuilder,
@@ -324,9 +323,7 @@ class ROCMAiterMLASparseBackend(AttentionBackend):
     ]
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [1, MultipleOf(16)]
 
     @staticmethod

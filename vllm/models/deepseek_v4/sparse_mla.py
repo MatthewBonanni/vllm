@@ -22,7 +22,6 @@ from vllm.utils.math_utils import cdiv
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionCGSupport,
-    AttentionImplBase,
     AttentionMetadata,
     AttentionMetadataBuilder,
     CommonAttentionMetadata,
@@ -58,9 +57,7 @@ class DeepseekV4SparseMLABackend(AttentionBackend):
     ]
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [256]
 
     @staticmethod

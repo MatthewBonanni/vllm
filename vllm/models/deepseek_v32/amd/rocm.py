@@ -10,7 +10,6 @@ from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
 from vllm.models.deepseek_v32.attention import DeepseekV32Attention, DeepseekV32Indexer
 from vllm.models.deepseek_v32.common.kernels import fused_norm_rope, fused_q
 from vllm.utils.torch_utils import is_quantized_kv_cache
-from vllm.v1.attention.backend import AttentionImplBase
 from vllm.v1.attention.backends.mla.indexer import DeepseekV32IndexerBackend
 from vllm.v1.attention.backends.mla.rocm_aiter_mla_sparse import (
     ROCMAiterMLASparseBackend,
@@ -19,17 +18,13 @@ from vllm.v1.attention.backends.mla.rocm_aiter_mla_sparse import (
 
 class DeepseekV32MLASparseBackend(ROCMAiterMLASparseBackend):
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list:
+    def get_supported_kernel_block_sizes() -> list:
         return [16, 32]
 
 
 class DeepseekV32ROCmIndexerBackend(DeepseekV32IndexerBackend):
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list:
+    def get_supported_kernel_block_sizes() -> list:
         return [16, 32]
 
 

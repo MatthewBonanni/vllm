@@ -28,7 +28,6 @@ from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.platforms import current_platform
-from vllm.v1.attention.backend import AttentionImplBase
 
 if current_platform.is_rocm():
     from vllm.models.minimax_m3.amd.ops.index_topk import (
@@ -91,9 +90,7 @@ class MiniMaxM3IndexerBackend(AttentionBackend):
         return [128]
 
     @staticmethod
-    def get_supported_kernel_block_sizes(
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
         return [128]
 
     @classmethod

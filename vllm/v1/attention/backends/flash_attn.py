@@ -5,7 +5,7 @@
 import copy
 import functools
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 import torch
@@ -20,8 +20,9 @@ from vllm.utils.torch_utils import (
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionImpl,
-    AttentionImplBase,
+    AttentionKernel,
     AttentionType,
+    KernelPageRequirements,
     MultipleOf,
 )
 from vllm.v1.attention.backends.fa_utils import (
@@ -136,17 +137,19 @@ class FlashAttentionBackend(AttentionBackend):
         return None
 
     @classmethod
-    def get_supported_kernel_block_sizes(
-        cls,
-        impl: AttentionImplBase | None = None,
-    ) -> list[int | MultipleOf]:
-        if impl is not None:
-            assert isinstance(impl, FlashAttentionImpl)
-            if impl.uses_sm90_fa4_fp8_kv_dequant:
-                return [64]
-            if impl.fa4_hd256:
-                return [FA4_HD256_PAGE_SIZE]
-            return [MultipleOf(16)]
+    def create_kernel(cls, *args: Any, **kwargs: Any) -> AttentionKernel:
+        impl = cls.get_impl_cls()(*args, **kwargs)
+        assert isinstance(impl, FlashAttentionImpl)
+        if impl.uses_sm90_fa4_fp8_kv_dequant:
+            sizes: tuple[int | MultipleOf, ...] = (64,)
+        elif impl.fa4_hd256:
+            sizes = (FA4_HD256_PAGE_SIZE,)
+        else:
+            sizes = (MultipleOf(16),)
+        return AttentionKernel(impl, KernelPageRequirements(sizes))
+
+    @classmethod
+    def get_supported_kernel_block_sizes(cls) -> list[int | MultipleOf]:
         if block_size := cls._get_sm90_fa4_fp8_kv_block_size():
             return [block_size]
         if block_size := cls._get_fa4_hd256_block_size():
