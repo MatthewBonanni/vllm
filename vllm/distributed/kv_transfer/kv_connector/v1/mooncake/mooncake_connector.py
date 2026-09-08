@@ -1052,12 +1052,14 @@ class MooncakeConnectorWorker:
         layers = get_layers_from_vllm_config(
             self.vllm_config, cast(type[Any], AttentionLayerBase)
         )
-        constraints = (
+        attn_layers_or_backends = (
             list(layers.values())
             if layers
             else get_current_attn_backends(self.vllm_config)
         )
-        kernel_block_size = select_common_block_size(self.block_size, constraints)
+        kernel_block_size = select_common_block_size(
+            self.block_size, attn_layers_or_backends
+        )
         if self.block_size != kernel_block_size:
             logger.info_once(
                 "User-specified logical block size (%s) does not match"

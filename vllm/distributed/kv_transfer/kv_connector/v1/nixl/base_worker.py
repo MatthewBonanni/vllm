@@ -717,12 +717,14 @@ class NixlBaseConnectorWorker:
         layers = get_layers_from_vllm_config(
             self.vllm_config, cast(type[Any], AttentionLayerBase)
         )
-        constraints = (
+        attn_layers_or_backends = (
             list(layers.values())
             if layers
             else get_current_attn_backends(self.vllm_config)
         )
-        kernel_block_size = select_common_block_size(self.block_size, constraints)
+        kernel_block_size = select_common_block_size(
+            self.block_size, attn_layers_or_backends
+        )
         # Number of blocks not accounting for kernel block mismatches
         self._logical_num_blocks = self.num_blocks
         if self.block_size != kernel_block_size:
