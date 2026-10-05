@@ -205,6 +205,7 @@ def test_draft_layer_rows_mirrored_after_drafter(monkeypatch, cg_mode):
         SimpleNamespace(
             scheduler_config=SimpleNamespace(max_num_batched_tokens=16),
             num_lookahead_tokens=3,
+            speculative_config=SimpleNamespace(),
         ),
         MagicMock(),
     )
