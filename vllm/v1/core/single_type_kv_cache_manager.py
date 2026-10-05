@@ -2390,6 +2390,14 @@ class _HiSparseAuxiliaryManager(SingleTypeKVCacheManager):
     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
         return 0
 
+    def remove_skipped_blocks(
+        self,
+        request_id: str,
+        processed_computed_tokens: int,
+        num_prompt_tokens: int | None = None,
+    ) -> None:
+        return None
+
     @classmethod
     def find_longest_cache_hit(
         cls,

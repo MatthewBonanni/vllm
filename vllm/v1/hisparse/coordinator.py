@@ -68,6 +68,8 @@ class _HiSparseRequestState:
     unpinned_pages: set[int] = field(default_factory=set)
     # Prefix pages whose GPU copies are adopted after the admitting allocation.
     pages_to_adopt: int = 0
+    # A hot region, once allocated, is held until the request is freed.
+    reads_from_host: bool = False
 
 
 @dataclass
@@ -80,7 +82,6 @@ class _PendingSpill:
     restore: bool = False
     expected_worker_completions: int = 0
     worker_completions: int = 0
-    enqueue_applied: bool = False
 
 
 class HiSparseCoordinator:
@@ -143,6 +144,7 @@ class HiSparseCoordinator:
         self.has_host_cache = self.host_manager is not None
         self.gpu_pool: BlockPool | None = None
         self.transition_watermark = 0
+        self.admission_window_blocks = 0
         if self.resident_managers:
             assert self.host_manager is not None
             assert self.host_group_id is not None
@@ -160,6 +162,17 @@ class HiSparseCoordinator:
                 raise ValueError("HiSparse host and resident block sizes must match.")
             self.max_spill_pages = max_model_len // resident_block_size
             self.gpu_pool = self.resident_managers[0].block_pool
+            if any(
+                manager.block_pool is not self.gpu_pool
+                for manager in self.resident_managers
+            ):
+                raise ValueError("HiSparse resident cache groups must share one pool.")
+            # Resident groups grow in lockstep, so one group's length stands
+            # for all of them.
+            self.admission_window_blocks = min(
+                manager.max_admission_blocks_per_request
+                for manager in self.resident_managers
+            )
             # Requests start reading from host once the shared pool runs this
             # low, so admissions find evictable pages rather than pinned ones.
             hot_cost = sum(manager.blocks_per_request for manager in hot_managers)
@@ -299,12 +312,9 @@ class HiSparseCoordinator:
     ) -> None:
         if host_block.is_null or host_block.block_hash is None:
             return
-        blocks: list[KVCacheBlock] = []
-        for manager in self.resident_managers:
-            block = manager.get_resident_page(request_id, page_idx)
-            if block is None:
-                return
-            blocks.append(block)
+        blocks = self._resident_page_blocks(request_id, page_idx)
+        if blocks is None:
+            return
         self._drop_copy(host_block.block_hash)
         self.copies[host_block.block_hash] = tuple(blocks)
         for block in blocks:
@@ -321,11 +331,15 @@ class HiSparseCoordinator:
     # Residency: pinning, unpinning and losing pages
     # ------------------------------------------------------------------
 
-    def _can_read_from_host(self, request_id: str) -> bool:
+    def _can_read_from_host(
+        self, request_id: str, state: _HiSparseRequestState
+    ) -> bool:
         """Whether resident pages may be dropped under the request."""
-        return bool(self.hot_managers) and all(
-            manager.has_hot(request_id) for manager in self.hot_managers
-        )
+        if not state.reads_from_host:
+            state.reads_from_host = bool(self.hot_managers) and all(
+                manager.has_hot(request_id) for manager in self.hot_managers
+            )
+        return state.reads_from_host
 
     def _fills_admission_window(self, request_id: str) -> bool:
         """Whether the request holds the resident pages admission reserved.
@@ -334,25 +348,25 @@ class HiSparseCoordinator:
         assuming older pages move to host; keeping them pinned past it lets a
         chunked prefill outgrow the pool it was admitted into.
         """
-        return any(
-            len(manager.req_to_blocks.get(request_id, ()))
-            >= manager.max_admission_blocks_per_request
-            for manager in self.resident_managers
-        )
+        blocks = self.resident_managers[0].req_to_blocks.get(request_id, ())
+        return len(blocks) >= self.admission_window_blocks
 
     def _resident_page_blocks(
-        self, request_id: str, page_idx: int
+        self, request_id: str, page_idx: int, num_excluded_tail_pages: int = 0
     ) -> list[KVCacheBlock] | None:
+        """The page's GPU block in every resident group, if each has one."""
         blocks: list[KVCacheBlock] = []
         for manager in self.resident_managers:
             req_blocks = manager.req_to_blocks.get(request_id)
             if (
                 req_blocks is None
-                or page_idx >= len(req_blocks) - _ACTIVE_TAIL_PAGES
-                or req_blocks[page_idx].is_null
+                or page_idx >= len(req_blocks) - num_excluded_tail_pages
             ):
                 return None
-            blocks.append(req_blocks[page_idx])
+            block = req_blocks[page_idx]
+            if block.is_null:
+                return None
+            blocks.append(block)
         return blocks
 
     def _unpin_page(
@@ -360,12 +374,14 @@ class HiSparseCoordinator:
     ) -> bool:
         if page_idx in state.pending_pages or page_idx not in state.valid_pages:
             return False
-        blocks = self._resident_page_blocks(request_id, page_idx)
+        blocks = self._resident_page_blocks(request_id, page_idx, _ACTIVE_TAIL_PAGES)
         if blocks is None:
             return False
-        for manager, block in zip(self.resident_managers, blocks):
-            self._owners.setdefault(block.block_id, set()).add((request_id, page_idx))
-            manager.block_pool.unpin_blocks([block], self._on_block_reused)
+        owner = (request_id, page_idx)
+        for block in blocks:
+            self._owners.setdefault(block.block_id, set()).add(owner)
+        assert self.gpu_pool is not None
+        self.gpu_pool.unpin_blocks(blocks, self._on_block_reused)
         state.pinned_clean.discard(page_idx)
         state.unpinned_pages.add(page_idx)
         return True
@@ -379,7 +395,7 @@ class HiSparseCoordinator:
         self, request_id: str, state: _HiSparseRequestState, page_idx: int
     ) -> None:
         state.pinned_clean.add(page_idx)
-        if self._can_read_from_host(request_id):
+        if self._can_read_from_host(request_id, state):
             self._unpin_page(request_id, state, page_idx)
 
     def _on_block_reused(self, block: KVCacheBlock) -> None:
@@ -425,7 +441,7 @@ class HiSparseCoordinator:
             host_blocks = self.host_manager.req_to_blocks.get(request_id, ())
             self._adopt_copies(request_id, state, host_blocks[: state.pages_to_adopt])
             state.pages_to_adopt = 0
-        if not self._can_read_from_host(request_id):
+        if not self._can_read_from_host(request_id, state):
             assert self.gpu_pool is not None
             if (
                 self.gpu_pool.get_num_free_blocks() >= self.transition_watermark
@@ -478,11 +494,6 @@ class HiSparseCoordinator:
             if page_idx in state.pending_pages:
                 continue
             if page_idx in state.valid_pages:
-                continue
-            if not all(
-                manager.get_resident_page(request_id, page_idx) is not None
-                for manager in self.resident_managers
-            ):
                 continue
             if self._plan_page_transfer(request_id, page_idx, after_forward=True):
                 budget -= 1
@@ -584,16 +595,13 @@ class HiSparseCoordinator:
         if host_block.is_null:
             return False
 
-        blocks: list[KVCacheBlock] = []
-        for manager in self.resident_managers:
-            block = manager.get_resident_page(request_id, page_idx)
-            if block is None:
-                return False
-            blocks.append(block)
+        blocks = self._resident_page_blocks(request_id, page_idx)
+        if blocks is None:
+            return False
 
         self.host_manager.block_pool.touch([host_block])
-        for manager, block in zip(self.resident_managers, blocks):
-            manager.block_pool.touch([block])
+        assert self.gpu_pool is not None
+        self.gpu_pool.touch(blocks)
         spill_id = self.next_spill_id
         self.next_spill_id += 1
         plan = SparseKVPageTransfer(
@@ -630,51 +638,55 @@ class HiSparseCoordinator:
         mirrors: list[SparseKVRowMirror] = []
         for request_id, num_computed_tokens, num_scheduled_tokens in requests:
             host_blocks = self.host_manager.req_to_blocks.get(request_id)
-            resident_blocks = [
-                manager.req_to_blocks.get(request_id)
-                for manager in self.resident_managers
-            ]
-            if host_blocks is None or any(blocks is None for blocks in resident_blocks):
+            if host_blocks is None:
+                continue
+            resident_blocks: list[list[KVCacheBlock]] = []
+            for manager in self.resident_managers:
+                blocks = manager.req_to_blocks.get(request_id)
+                if blocks is None:
+                    break
+                resident_blocks.append(blocks)
+            if len(resident_blocks) != len(self.resident_managers):
                 continue
             token_position = num_computed_tokens
             end_position = token_position + num_scheduled_tokens
             while token_position < end_position:
                 page_idx, row_offset = divmod(token_position, block_size)
                 num_rows = min(block_size - row_offset, end_position - token_position)
+                token_position += num_rows
                 # A page without a GPU copy has no mirror source, and a page
                 # without a host block has no destination. Skip just that page:
                 # its neighbours in the window are still mirrorable, and a
                 # window only ever moves forward, so dropping them here would
                 # leave their host rows permanently stale.
-                source_starts = []
-                for blocks in resident_blocks:
-                    assert blocks is not None
-                    if page_idx >= len(blocks) or blocks[page_idx].is_null:
-                        break
-                    source_starts.append(
-                        blocks[page_idx].block_id * block_size + row_offset
-                    )
-                if len(source_starts) != len(resident_blocks):
-                    token_position += num_rows
+                if page_idx >= len(host_blocks):
                     continue
-                host_block_idx = page_idx
-                if host_block_idx >= len(host_blocks):
-                    token_position += num_rows
-                    continue
-                host_block = host_blocks[host_block_idx]
+                host_block = host_blocks[page_idx]
                 if host_block.is_null:
-                    token_position += num_rows
+                    continue
+                page_blocks = [
+                    blocks[page_idx]
+                    for blocks in resident_blocks
+                    if page_idx < len(blocks)
+                ]
+                if len(page_blocks) != len(resident_blocks) or any(
+                    block.is_null for block in page_blocks
+                ):
                     continue
                 mirrors.append(
                     SparseKVRowMirror(
-                        source_starts=tuple(source_starts),
+                        source_starts=tuple(
+                            [
+                                block.block_id * block_size + row_offset
+                                for block in page_blocks
+                            ]
+                        ),
                         destination_start=(
                             host_block.block_id * block_size + row_offset
                         ),
                         num_rows=num_rows,
                     )
                 )
-                token_position += num_rows
         return tuple(mirrors)
 
     def all_context_pages_resident(
@@ -723,14 +735,13 @@ class HiSparseCoordinator:
 
     def has_pending_reclamation(self) -> bool:
         """Whether an in-flight spill will free GPU or host blocks on completion."""
-        return any(
-            pending.host_block.ref_cnt == 1
-            or (
-                pending.page[0] in self.request_states
-                and self._can_read_from_host(pending.page[0])
-            )
-            for pending in self.pending_spills.values()
-        )
+        for pending in self.pending_spills.values():
+            if pending.host_block.ref_cnt == 1:
+                return True
+            state = self.request_states.get(pending.page[0])
+            if state is not None and self._can_read_from_host(pending.page[0], state):
+                return True
+        return False
 
     def has_pending_work(self) -> bool:
         return bool(self.spills_to_send or self.pending_spills or self._retained_copies)
@@ -740,39 +751,42 @@ class HiSparseCoordinator:
         enqueued_counts: Mapping[int, int],
         completed_counts: Mapping[int, int],
     ) -> None:
+        updated: set[int] = set()
         for spill_id, count in enqueued_counts.items():
             pending = self.pending_spills.get(spill_id)
             if pending is not None and pending.expected_worker_completions == 0:
                 pending.expected_worker_completions = count
+                updated.add(spill_id)
         for spill_id, count in completed_counts.items():
             pending = self.pending_spills.get(spill_id)
             if pending is not None:
                 pending.worker_completions += count
-
-        self._apply_enqueued_spills()
-        self._complete_host_writes()
-
-    def _apply_enqueued_spills(self) -> None:
-        """Drop the GPU pins once every worker has completed the transfer."""
-        for pending in self.pending_spills.values():
-            if (
-                pending.enqueue_applied
-                or not pending.expected_worker_completions
-                or pending.worker_completions < pending.expected_worker_completions
-            ):
-                continue
-            for manager, block in zip(self.resident_managers, pending.resident_blocks):
-                manager.block_pool.free_blocks([block])
-            pending.enqueue_applied = True
-
-    def _complete_host_writes(self) -> None:
+                updated.add(spill_id)
+        # Only a transfer whose counts just changed can have become complete.
+        # Spill ids ascend in pending_spills insertion order.
         completed = [
             pending
-            for pending in self.pending_spills.values()
-            if pending.enqueue_applied
-            and pending.expected_worker_completions
+            for spill_id in sorted(updated)
+            if (pending := self.pending_spills[spill_id]).expected_worker_completions
             and pending.worker_completions >= pending.expected_worker_completions
         ]
+        if not completed:
+            return
+        self._apply_enqueued_spills(completed)
+        self._complete_host_writes(completed)
+
+    def _apply_enqueued_spills(self, completed: list[_PendingSpill]) -> None:
+        """Drop the GPU pins once every worker has completed the transfer."""
+        assert self.gpu_pool is not None
+        # Reversed so the pool's LIFO free queue reuses the blocks in the
+        # order that freeing them one at a time would.
+        self.gpu_pool.free_blocks(
+            reversed(
+                [block for pending in completed for block in pending.resident_blocks]
+            )
+        )
+
+    def _complete_host_writes(self, completed: list[_PendingSpill]) -> None:
         completed_request_ids: set[str] = set()
         for pending in completed:
             self.pending_spills.pop(pending.transfer_id, None)
@@ -852,6 +866,7 @@ class HiSparseCoordinator:
             blocks = manager.req_to_blocks.get(request_id)
             if not blocks:
                 continue
+            clean_blocks: list[KVCacheBlock] = []
             # Tail first, so a prefix loses its tail pages before its head.
             for page_idx in reversed(range(len(blocks))):
                 block = blocks[page_idx]
@@ -865,10 +880,11 @@ class HiSparseCoordinator:
                     page_idx in state.valid_pages
                     and page_idx not in state.pending_pages
                 ):
-                    manager.block_pool.unpin_blocks([block], self._on_block_reused)
+                    clean_blocks.append(block)
                 else:
                     continue
                 blocks[page_idx] = manager._null_block
+            manager.block_pool.unpin_blocks(clean_blocks, self._on_block_reused)
 
 
 def get_hisparse_coordinator(
