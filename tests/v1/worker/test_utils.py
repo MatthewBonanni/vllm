@@ -501,11 +501,10 @@ def test_hisparse_pre_forward_transfer_builds_page_descriptors():
     worker.kernel_block_size = 2
     source = torch.empty((3, 2, 4), dtype=torch.uint8)
     destination = torch.empty((6, 4), dtype=torch.uint8)
-    worker.resident_caches = (source,)
-    worker.host_caches = (destination,)
     worker.cache_handles = [
         SimpleNamespace(runtime=SimpleNamespace(resident_source_index=0))
     ]
+    worker._bind_dma_caches((source,), (destination,))
     worker._dma_free_descriptors = []
     worker._submit_dma_descriptors = MagicMock()
 
@@ -622,13 +621,12 @@ def test_hisparse_dma_row_mirror_builds_descriptors(monkeypatch):
     worker.kernel_block_size = 2
     source = torch.empty((3, 2, 4), dtype=torch.uint8)
     destination = torch.empty((6, 4), dtype=torch.uint8)
-    worker.resident_caches = (source,)
-    worker.host_caches = (destination,)
     worker.cache_handles = [
         SimpleNamespace(
             runtime=SimpleNamespace(resident_source_index=0), decode_batch=True
         )
     ]
+    worker._bind_dma_caches((source,), (destination,))
     worker.hot_backing = SimpleNamespace(device=torch.device("cuda:0"))
     worker.dma_stream = MagicMock()
     worker.host_write_event = MagicMock()
@@ -668,13 +666,12 @@ def test_hisparse_row_dma_uses_resident_spans():
     destination = torch.empty((12, 4), dtype=torch.uint8)
     worker.is_host_writer = True
     worker.kernel_block_size = 2
-    worker.resident_caches = (source,)
-    worker.host_caches = (destination,)
     worker.cache_handles = [
         SimpleNamespace(
             runtime=SimpleNamespace(resident_source_index=0), decode_batch=True
         )
     ]
+    worker._bind_dma_caches((source,), (destination,))
     worker._set_row_mirrors(
         (
             SparseKVRowMirror((0,), 4, 2),
