@@ -44,9 +44,6 @@ class KVConnector:
     def set_disabled(self, disabled: bool) -> None:
         pass
 
-    def reset_capture_state(self) -> None:
-        pass
-
 
 class ActiveKVConnector(KVConnector):
     def __init__(
@@ -91,9 +88,6 @@ class ActiveKVConnector(KVConnector):
     def finish_forward(self) -> None:
         if not self._disabled:
             self.kv_connector.finish_forward()
-
-    def reset_capture_state(self) -> None:
-        self.kv_connector.reset_capture_state()
 
     def post_forward(self, finished_req_ids: set[str]) -> KVConnectorOutput | None:
         if self._disabled:

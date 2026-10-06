@@ -189,6 +189,7 @@ class HiSparseConnectorWorker:
         self.vllm_config = vllm_config
         self.kv_cache_config = kv_cache_config
         self._initialized = False
+        self._served = False
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         forward_context = self.vllm_config.compilation_config.static_forward_context
@@ -403,6 +404,10 @@ class HiSparseConnectorWorker:
         request_ids: list[str] | None = None,
         num_tokens: int = 0,
     ) -> None:
+        if not self._served:
+            # Warmup and graph capture fill the hot buffers with dummy rows.
+            self._served = True
+            self.reset_hot_state()
         self._stage_row_mirror_mapping(num_tokens)
         self._finish_previous_step()
         previous_host_write_event = self.host_write_event
