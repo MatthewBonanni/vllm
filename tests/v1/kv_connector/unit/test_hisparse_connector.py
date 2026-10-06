@@ -403,5 +403,38 @@ def test_scheduled_prefix_hit_publishes_adopted_copies():
 
     scheduler.build_connector_meta(scheduler_output)
 
-    resident_ids = scheduler_output.block_table_updates[resumed.request_id][2]
+    assert scheduler_output.block_table_updates is None
+    resident_ids = scheduler_output.scheduled_new_reqs[0].block_ids[2]
     assert resident_ids[:3] == copy_ids[:3]
+
+
+def test_block_table_update_is_the_only_write_for_its_row():
+    """The worker applies a step's row writes unordered, so an updated row
+    must not also arrive as new-request or incremental block IDs."""
+    coordinator = MagicMock(host_group_id=0)
+    coordinator.take_block_table_updates.return_value = {
+        "new": ([7, 8],),
+        "running": ([1, 5],),
+    }
+    scheduler = HiSparseConnectorScheduler(async_speculative=False)
+    scheduler.bind_coordinator(coordinator)
+    scheduler.requests = {
+        req_id: SimpleNamespace(num_tokens=16) for req_id in ("new", "running", "other")
+    }
+    scheduler_output = SimpleNamespace(
+        scheduled_new_reqs=[
+            SimpleNamespace(req_id="new", num_computed_tokens=0, block_ids=([0, 8],))
+        ],
+        scheduled_cached_reqs=SimpleNamespace(
+            req_ids=["running", "other"],
+            num_computed_tokens=[4, 4],
+            new_block_ids=[([5],), ([6],)],
+        ),
+        num_scheduled_tokens={"new": 2, "running": 1, "other": 1},
+    )
+
+    scheduler.build_connector_meta(scheduler_output)
+
+    assert scheduler_output.scheduled_new_reqs[0].block_ids == ([7, 8],)
+    assert scheduler_output.scheduled_cached_reqs.new_block_ids == [None, ([6],)]
+    assert scheduler_output.block_table_updates == {"running": ([1, 5],)}
