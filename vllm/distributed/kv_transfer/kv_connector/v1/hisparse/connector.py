@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -56,6 +56,7 @@ class HiSparseConnectorMetadata(KVConnectorMetadata):
     source_block_ids: tuple[int, ...]
     row_mirrors: dict[str, tuple[SparseKVRowMirror, ...]]
     all_context_pages_resident: bool
+    block_table_updates: dict[str, dict[int, list[int]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -149,8 +150,8 @@ class HiSparseConnectorScheduler:
             )
             for request_id, start, count in scheduled_requests
         )
-        scheduler_output.block_table_updates = (
-            self.coordinator.take_block_table_updates() or None
+        block_table_updates = self.coordinator.take_block_table_updates(
+            scheduler_output.num_scheduled_tokens
         )
         command = self.coordinator.build_offload_command()
         host_block_copies = self.coordinator.take_host_block_copies()
@@ -190,6 +191,7 @@ class HiSparseConnectorScheduler:
             tuple(source_block_ids),
             row_mirrors,
             self.coordinator.all_context_pages_resident(scheduled_requests),
+            block_table_updates,
         )
 
     def update_connector_output(self, connector_output: KVConnectorOutput) -> None:

@@ -699,15 +699,22 @@ class HiSparseCoordinator:
             self._resident_requests.add(request_id)
         return True
 
-    def take_block_table_updates(self) -> dict[str, tuple[list[int], ...]]:
+    def take_block_table_updates(
+        self, request_ids: Iterable[str]
+    ) -> dict[str, dict[int, list[int]]]:
+        """Drain the resident rows of scheduled requests whose pages changed."""
         updates = {
-            request_id: tuple(
-                [block.block_id for block in manager.req_to_blocks.get(request_id, [])]
-                for manager in self.managers
-            )
-            for request_id in self.block_table_updates
+            request_id: {
+                manager.kv_cache_group_id: [
+                    block.block_id
+                    for block in manager.req_to_blocks.get(request_id, ())
+                ]
+                for manager in self.resident_managers
+            }
+            for request_id in request_ids
+            if request_id in self.block_table_updates
         }
-        self.block_table_updates.clear()
+        self.block_table_updates.difference_update(updates)
         return updates
 
     def build_offload_command(self) -> SparseKVOffloadCommand | None:
@@ -822,6 +829,7 @@ class HiSparseCoordinator:
         """Detach the request; its clean pages stay readable copies in the pool."""
         self._resident_requests.discard(request_id)
         self._pending_imports.pop(request_id, None)
+        self.block_table_updates.discard(request_id)
         state = self.request_states.pop(request_id, None)
         if state is None:
             return

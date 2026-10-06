@@ -332,7 +332,6 @@ def test_hisparse_async_speculation_mirrors_uncertain_position_range():
     connector.connector_scheduler = scheduler
     connector.update_state_after_alloc(request, None, 0)
     scheduler_output = SimpleNamespace(
-        block_table_updates=None,
         kv_cache_block_copies=None,
         scheduled_new_reqs=[],
         scheduled_cached_reqs=SimpleNamespace(
@@ -374,7 +373,11 @@ def test_hisparse_reports_when_context_is_fully_resident():
     pool.get_new_blocks(pool.get_num_free_blocks())
 
     assert not coordinator.all_context_pages_resident(scheduled)
-    assert coordinator.take_block_table_updates().keys() == {request.request_id}
+    # An unscheduled request keeps its update until it is next scheduled.
+    assert coordinator.take_block_table_updates([]) == {}
+    assert coordinator.take_block_table_updates([request.request_id]).keys() == {
+        request.request_id
+    }
 
 
 def test_hisparse_host_prefix_can_be_completed_by_indexer_offload():
@@ -664,7 +667,7 @@ def test_hisparse_keeps_resident_pages_until_hot_buffer_is_allocated(enable_cach
     assert all(m.has_hot("first") for m in coordinator.hot_managers)
     pool.get_new_blocks(pool.get_num_free_blocks())
     assert not coordinator.all_context_pages_resident(scheduled)
-    assert "first" in coordinator.take_block_table_updates()
+    assert "first" in coordinator.take_block_table_updates(["first"])
 
 
 def test_hisparse_full_pool_keeps_pages_pinned_until_preemption():

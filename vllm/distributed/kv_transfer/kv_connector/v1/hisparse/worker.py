@@ -318,6 +318,7 @@ class HiSparseConnectorWorker:
         self.host_write_event = self.host_write_events[1]
         self._next_host_write_event = 0
         self.cache_handles = cache_handles
+        self.block_tables = cache_handles[0].block_tables
         self.leader_runtimes = [cache.runtime for _, cache in self._group_leaders]
         request_state_indices = {
             indices.data_ptr(): indices
@@ -438,6 +439,50 @@ class HiSparseConnectorWorker:
         self._pending_invalid_block_ids.extend(metadata.source_block_ids)
         if request_state_indices is not None:
             self.set_request_state_indices(request_state_indices)
+        if metadata.block_table_updates:
+            assert request_ids is not None and request_state_indices is not None
+            self._update_block_tables(
+                metadata.block_table_updates, request_ids, request_state_indices
+            )
+
+    def _update_block_tables(
+        self,
+        updates: Mapping[str, Mapping[int, list[int]]],
+        request_ids: list[str],
+        request_state_indices: torch.Tensor,
+    ) -> None:
+        """Rewrite changed rows in the persistent and this step's gathered tables."""
+        block_tables = self.block_tables
+        assert block_tables is not None
+        batch_rows = [row for row, req in enumerate(request_ids) if req in updates]
+        assert len(batch_rows) == len(updates)
+        device = request_state_indices.device
+        for group_id in next(iter(updates.values())):
+            blocks_per_kv_block = block_tables.blocks_per_kv_block[group_id]
+            rows: list[int] = []
+            cols: list[int] = []
+            values: list[int] = []
+            for batch_row in batch_rows:
+                block_ids = updates[request_ids[batch_row]][group_id]
+                if blocks_per_kv_block > 1:
+                    block_ids = [
+                        block_id * blocks_per_kv_block + offset
+                        for block_id in block_ids
+                        for offset in range(blocks_per_kv_block)
+                    ]
+                rows.extend([batch_row] * len(block_ids))
+                cols.extend(range(len(block_ids)))
+                values.extend(block_ids)
+            if not values:
+                continue
+            index = torch.tensor([rows, cols], dtype=torch.int64, pin_memory=True)
+            index = index.to(device, non_blocking=True)
+            entries = torch.tensor(values, dtype=torch.int32, pin_memory=True)
+            entries = entries.to(device, non_blocking=True)
+            batch_index, col_index = index
+            state_index = request_state_indices[batch_index].long()
+            block_tables.block_tables[group_id].gpu[state_index, col_index] = entries
+            block_tables.input_block_tables[group_id][batch_index, col_index] = entries
 
     def _clear_forward_mirror_state(self) -> None:
         self._per_layer_mirrored.clear()

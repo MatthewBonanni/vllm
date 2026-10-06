@@ -299,6 +299,7 @@ def bind_hisparse_kv_caches(
         raise RuntimeError("HiSparse found no hot-cache handles.")
     (source_group_id,) = kv_cache_config.host_group_ids
     for cache_handle in cache_handles:
+        cache_handle.block_tables = block_tables
         cache_handle.source_block_table = block_tables.input_block_tables[
             source_group_id
         ]

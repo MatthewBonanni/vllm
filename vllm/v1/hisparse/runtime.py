@@ -33,6 +33,7 @@ HOST_REGISTER_CHUNK_BYTES = 256 * 2**30
 if TYPE_CHECKING:
     from vllm.v1.attention.backends.mla.index_group import HiSparseMLAIndexGroup
     from vllm.v1.kv_cache_interface import KVCacheConfig
+    from vllm.v1.worker.gpu.block_table import BlockTables
 
 # fp8_ds_mla KV row: 512 B quantized NoPE + 16 B scales + 128 B RoPE.
 FP8_DS_MLA_ROW_BYTES = 656
@@ -1128,6 +1129,7 @@ class HiSparseCacheHandle:
         # Speculator layers write their rows after the target forward.
         self.draft_layer = False
         self.index_group_caches: list[HiSparseCacheHandle] = [self]
+        self.block_tables: BlockTables | None = None
 
     def prepare_group_for_batch(self, attn_metadata: Any | None) -> None:
         assert self.runtime.is_group_leader
