@@ -87,6 +87,21 @@ class HiSparseConnectorWorkerMetadata(KVConnectorWorkerMetadata):
         )
 
 
+def _replace_rows(
+    scheduler_output: SchedulerOutput, rows: dict[str, tuple[list[int], ...]]
+) -> None:
+    """Send changed rows whole: in a new request's row, or as a resumed row."""
+    for request in scheduler_output.scheduled_new_reqs:
+        if (block_ids := rows.pop(request.req_id, None)) is not None:
+            request.block_ids = block_ids
+    cached_reqs = scheduler_output.scheduled_cached_reqs
+    for index, req_id in enumerate(cached_reqs.req_ids):
+        if (block_ids := rows.pop(req_id, None)) is not None:
+            cached_reqs.new_block_ids[index] = block_ids
+            cached_reqs.resumed_req_ids.add(req_id)
+    assert not rows
+
+
 class HiSparseConnectorScheduler:
     def __init__(
         self,
@@ -149,9 +164,11 @@ class HiSparseConnectorScheduler:
             )
             for request_id, start, count in scheduled_requests
         )
-        scheduler_output.block_table_updates = (
-            self.coordinator.take_block_table_updates() or None
+        block_table_updates = self.coordinator.take_block_table_updates(
+            scheduler_output.num_scheduled_tokens
         )
+        if block_table_updates:
+            _replace_rows(scheduler_output, block_table_updates)
         command = self.coordinator.build_offload_command()
         host_block_copies = self.coordinator.take_host_block_copies()
         source_group_id = self.coordinator.host_group_id

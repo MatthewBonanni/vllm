@@ -403,5 +403,32 @@ def test_scheduled_prefix_hit_publishes_adopted_copies():
 
     scheduler.build_connector_meta(scheduler_output)
 
-    resident_ids = scheduler_output.block_table_updates[resumed.request_id][2]
+    resident_ids = scheduler_output.scheduled_new_reqs[0].block_ids[2]
     assert resident_ids[:3] == copy_ids[:3]
+
+
+def test_changed_running_row_is_sent_as_resumed_row():
+    """A running request's changed row replaces, not extends, the worker's row."""
+    coordinator = MagicMock(host_group_id=0)
+    coordinator.take_block_table_updates.return_value = {"running": ([4, 0, 6],)}
+    coordinator.build_offload_command.return_value = None
+    coordinator.build_row_mirrors.return_value = ()
+    scheduler = HiSparseConnectorScheduler(async_speculative=False)
+    scheduler.bind_coordinator(coordinator)
+    scheduler.requests["running"] = SimpleNamespace(num_tokens=200)
+    cached_reqs = SimpleNamespace(
+        req_ids=["running"],
+        resumed_req_ids=set(),
+        new_block_ids=[([6],)],
+        num_computed_tokens=[192],
+    )
+    scheduler_output = SimpleNamespace(
+        scheduled_new_reqs=[],
+        scheduled_cached_reqs=cached_reqs,
+        num_scheduled_tokens={"running": 1},
+    )
+
+    scheduler.build_connector_meta(scheduler_output)
+
+    assert cached_reqs.new_block_ids == [([4, 0, 6],)]
+    assert cached_reqs.resumed_req_ids == {"running"}

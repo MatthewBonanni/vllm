@@ -3,8 +3,9 @@
 
 import contextlib
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
+import numpy as np
 import pytest
 import torch
 
@@ -253,6 +254,36 @@ def test_append_block_ids_rejects_write_past_row_capacity():
         )
 
     assert block_tables.num_blocks.np[0, 1] == 3
+
+
+def test_update_requests_replaces_resumed_rows():
+    """CachedRequestData's contract: a resumed request's new_block_ids replace
+    its row; other requests' are appended."""
+    runner = GPUModelRunner.__new__(GPUModelRunner)
+    runner.req_states = SimpleNamespace(
+        req_id_to_index={"running": 0, "resumed": 1},
+        num_computed_tokens_np=np.zeros(2, dtype=np.int32),
+        prefill_len=SimpleNamespace(np=np.zeros(2, dtype=np.int32)),
+        num_computed_prefill_tokens=np.zeros(2, dtype=np.int32),
+    )
+    runner.block_tables = Mock()
+    scheduler_output = SimpleNamespace(
+        scheduled_cached_reqs=SimpleNamespace(
+            req_ids=["running", "resumed"],
+            resumed_req_ids={"resumed"},
+            num_computed_tokens=[4, 8],
+            new_block_ids=[([3],), ([0, 5],)],
+        ),
+        new_block_ids_to_zero=None,
+        kv_cache_block_copies=None,
+    )
+
+    runner.update_requests(scheduler_output)
+
+    assert runner.block_tables.append_block_ids.call_args_list == [
+        call(0, ([3],), overwrite=False),
+        call(1, ([0, 5],), overwrite=True),
+    ]
 
 
 def _make_capture_runner(captured: bool) -> GPUModelRunner:
