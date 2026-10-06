@@ -304,7 +304,9 @@ class SchedulerOutput:
     # CoW copies to apply after zeroing new blocks and before forward.
     kv_cache_block_copies: list[KVCacheBlockCopy] | None = None
 
-    # Complete block-table rows that replace incrementally appended block IDs.
+    # Complete block-table rows for running requests, replacing their existing
+    # rows. A request listed here has no new_block_ids, and new requests never
+    # appear here: their block_ids are already complete.
     block_table_updates: dict[str, tuple[list[int], ...]] | None = None
 
     # Scheduler-local; always None by the time this reaches a worker.

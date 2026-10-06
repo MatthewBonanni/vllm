@@ -149,9 +149,7 @@ class HiSparseConnectorScheduler:
             )
             for request_id, start, count in scheduled_requests
         )
-        scheduler_output.block_table_updates = (
-            self.coordinator.take_block_table_updates() or None
-        )
+        block_table_updates = self.coordinator.take_block_table_updates()
         command = self.coordinator.build_offload_command()
         host_block_copies = self.coordinator.take_host_block_copies()
         source_group_id = self.coordinator.host_group_id
@@ -184,6 +182,18 @@ class HiSparseConnectorScheduler:
                     ),
                 ),
             )
+        # Each updated row must reach the worker as one write: new requests
+        # carry it as their block IDs, and running requests drop the
+        # incremental block IDs the full row already contains.
+        for request in scheduler_output.scheduled_new_reqs:
+            block_ids = block_table_updates.pop(request.req_id, None)
+            if block_ids is not None:
+                request.block_ids = block_ids
+        cached_reqs = scheduler_output.scheduled_cached_reqs
+        for i, request_id in enumerate(cached_reqs.req_ids):
+            if request_id in block_table_updates:
+                cached_reqs.new_block_ids[i] = None
+        scheduler_output.block_table_updates = block_table_updates or None
         return HiSparseConnectorMetadata(
             command,
             host_block_copies,
