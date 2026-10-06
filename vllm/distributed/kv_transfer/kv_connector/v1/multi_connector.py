@@ -324,10 +324,6 @@ class MultiConnector(KVConnectorBase_V1, SupportsHMA):
         for c in self._connectors:
             c.finish_forward()
 
-    def reset_capture_state(self) -> None:
-        for c in self._connectors:
-            c.reset_capture_state()
-
     def wait_for_layer_load(self, layer_name: str) -> None:
         for c in self._connectors:
             c.wait_for_layer_load(layer_name)

@@ -304,10 +304,6 @@ class KVConnectorBase_V1(ABC):
         """Notify the connector that the model no longer reads this step's KV."""
         return
 
-    def reset_capture_state(self) -> None:
-        """Reset worker state mutated while capturing CUDA graphs."""
-        return
-
     def handle_preemptions(self, kv_connector_metadata: KVConnectorMetadata):
         """Handle preempted requests or evicted blocks BEFORE they are overwritten.
         Needed for connectors which use async saves (e.g., OffloadingConnector)

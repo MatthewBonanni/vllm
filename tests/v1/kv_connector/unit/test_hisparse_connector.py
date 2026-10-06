@@ -224,6 +224,7 @@ def test_draft_layer_rows_mirrored_after_drafter(monkeypatch, cg_mode):
             request_state_indices=request_state_indices,
             begin_forward=MagicMock(),
             invalidate_written_slots=MagicMock(),
+            reset_hot_state=MagicMock(),
         )
         handle = HiSparseCacheHandle(runtime)
         handle.view = SimpleNamespace(
@@ -323,6 +324,10 @@ def test_draft_layer_rows_mirrored_after_drafter(monkeypatch, cg_mode):
     )
     ((completion_event, _),) = worker._pending_transfer_events
     worker_meta = connector.build_connector_worker_meta()
+    # Hot rows cached by warmup and graph capture are dropped once, on the
+    # first served step.
+    for handle in handles:
+        handle.runtime.reset_hot_state.assert_called_once()
 
     host_rows = slice(host_block * block_size, (host_block + 1) * block_size)
     torch.testing.assert_close(target.runtime.host_cache[host_rows], torch.ones(4, 8))
