@@ -456,38 +456,14 @@ class HiSparseConnectorWorker:
         request_ids: list[str],
         request_state_indices: torch.Tensor,
     ) -> None:
-        """Rewrite changed rows in the persistent and this step's gathered tables."""
-        block_tables = self.block_tables
-        assert block_tables is not None
+        assert self.block_tables is not None
         batch_rows = [row for row, req in enumerate(request_ids) if req in updates]
         assert len(batch_rows) == len(updates)
-        device = request_state_indices.device
-        for group_id in next(iter(updates.values())):
-            blocks_per_kv_block = block_tables.blocks_per_kv_block[group_id]
-            rows: list[int] = []
-            cols: list[int] = []
-            values: list[int] = []
-            for batch_row in batch_rows:
-                block_ids = updates[request_ids[batch_row]][group_id]
-                if blocks_per_kv_block > 1:
-                    block_ids = [
-                        block_id * blocks_per_kv_block + offset
-                        for block_id in block_ids
-                        for offset in range(blocks_per_kv_block)
-                    ]
-                rows.extend([batch_row] * len(block_ids))
-                cols.extend(range(len(block_ids)))
-                values.extend(block_ids)
-            if not values:
-                continue
-            index = torch.tensor([rows, cols], dtype=torch.int64, pin_memory=True)
-            index = index.to(device, non_blocking=True)
-            entries = torch.tensor(values, dtype=torch.int32, pin_memory=True)
-            entries = entries.to(device, non_blocking=True)
-            batch_index, col_index = index
-            state_index = request_state_indices[batch_index].long()
-            block_tables.block_tables[group_id].gpu[state_index, col_index] = entries
-            block_tables.input_block_tables[group_id][batch_index, col_index] = entries
+        self.block_tables.overwrite_rows(
+            request_state_indices,
+            batch_rows,
+            [updates[request_ids[row]] for row in batch_rows],
+        )
 
     def _clear_forward_mirror_state(self) -> None:
         self._per_layer_mirrored.clear()

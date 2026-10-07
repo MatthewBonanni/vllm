@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 
 import torch
 
@@ -183,6 +183,39 @@ class BlockTables:
             BLOCK_SIZE=1024,  # type: ignore
         )
         return tuple(bt[:num_reqs_padded] for bt in out)
+
+    def overwrite_rows(
+        self,
+        idx_mapping: torch.Tensor,
+        batch_rows: Sequence[int],
+        rows: Sequence[Mapping[int, list[int]]],
+    ) -> None:
+        """Overwrite the leading block IDs of gathered rows, per KV cache group,
+        in both the persistent and this step's input block tables."""
+        for group_id in rows[0] if rows else ():
+            bpk = self.blocks_per_kv_block[group_id]
+            batch_index: list[int] = []
+            col_index: list[int] = []
+            values: list[int] = []
+            for batch_row, row in zip(batch_rows, rows):
+                block_ids = row[group_id]
+                if bpk > 1:
+                    block_ids = [b * bpk + k for b in block_ids for k in range(bpk)]
+                batch_index.extend([batch_row] * len(block_ids))
+                col_index.extend(range(len(block_ids)))
+                values.extend(block_ids)
+            if not values:
+                continue
+            index = torch.tensor(
+                [batch_index, col_index], dtype=torch.int64, pin_memory=True
+            ).to(self.device, non_blocking=True)
+            entries = torch.tensor(values, dtype=torch.int32, pin_memory=True).to(
+                self.device, non_blocking=True
+            )
+            batch, col = index
+            state = idx_mapping[batch].long()
+            self.block_tables[group_id].gpu[state, col] = entries
+            self.input_block_tables[group_id][batch, col] = entries
 
     def get_dummy_block_tables(self, num_reqs: int) -> tuple[torch.Tensor, ...]:
         # NOTE(woosuk): The output may be used for CUDA graph capture.

@@ -412,30 +412,3 @@ def test_scheduled_prefix_hit_publishes_adopted_copies():
     resident_group_id = coordinator.resident_managers[0].kv_cache_group_id
     resident_ids = metadata.block_table_updates[resumed.request_id][resident_group_id]
     assert resident_ids[:3] == copy_ids[:3]
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_block_table_update_rewrites_persistent_and_gathered_rows():
-    """A row changed in place must reach both the persistent row (later steps)
-    and this step's already-gathered row, at the request's state index."""
-    device = torch.device("cuda")
-    tables = [torch.zeros(4, 8, dtype=torch.int32, device=device) for _ in range(2)]
-    gathered = [torch.zeros(2, 8, dtype=torch.int32, device=device) for _ in range(2)]
-    worker = object.__new__(HiSparseConnectorWorker)
-    worker.block_tables = SimpleNamespace(
-        blocks_per_kv_block=[1, 2],
-        block_tables=[SimpleNamespace(gpu=table) for table in tables],
-        input_block_tables=gathered,
-    )
-
-    worker._update_block_tables(
-        {"b": {1: [5, 0]}},
-        ["a", "b"],
-        torch.tensor([3, 1], dtype=torch.int32, device=device),
-    )
-
-    expected = [10, 11, 0, 1, 0, 0, 0, 0]
-    assert tables[1][1].tolist() == expected
-    assert gathered[1][1].tolist() == expected
-    assert not tables[1][3].any() and not gathered[1][0].any()
-    assert not tables[0].any() and not gathered[0].any()

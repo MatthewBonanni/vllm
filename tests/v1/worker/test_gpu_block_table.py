@@ -108,6 +108,34 @@ def test_block_tables_apply_staged_writes_fuses_kv_groups(monkeypatch):
     assert block_tables.num_blocks.np[2, 0] == 1
 
 
+def test_overwrite_rows_updates_persistent_and_gathered_rows():
+    """An in-place row change must reach the persistent row (later steps) and
+    this step's already-gathered row, expanded to kernel blocks."""
+    device = torch.device("cuda")
+    block_tables = BlockTables(
+        block_sizes=[16, 32],
+        max_num_reqs=4,
+        max_num_batched_tokens=64,
+        max_num_blocks_per_group=[8, 8],
+        device=device,
+        kernel_block_sizes=[16, 16],
+    )
+    for req_index in (1, 3):
+        block_tables.append_block_ids(req_index, ([1, 2], [7, 8]), overwrite=True)
+    block_tables.apply_staged_writes()
+    idx_mapping = torch.tensor([3, 1], dtype=torch.int32, device=device)
+    gathered = block_tables.gather_block_tables(idx_mapping, num_reqs_padded=2)
+
+    block_tables.overwrite_rows(idx_mapping, [1], [{1: [5, 0]}])
+
+    expected = [10, 11, 0, 1]
+    assert block_tables.block_tables[1].gpu[1, :4].tolist() == expected
+    assert gathered[1][1, :4].tolist() == expected
+    assert block_tables.block_tables[1].gpu[3, :4].tolist() == [14, 15, 16, 17]
+    assert gathered[1][0, :4].tolist() == [14, 15, 16, 17]
+    assert gathered[0][:, :2].tolist() == [[1, 2], [1, 2]]
+
+
 def test_block_tables_apply_staged_writes_single_group():
     device = torch.device("cuda")
     block_tables = BlockTables(
