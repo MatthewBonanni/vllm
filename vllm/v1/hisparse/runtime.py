@@ -1221,6 +1221,7 @@ class HiSparseCacheHandle:
         )
         if (
             self.batch_block_table is None
+            and self.block_table is not None
             and self.runtime.is_group_leader
             and self.all_context_pages_resident
             and (
@@ -1228,7 +1229,6 @@ class HiSparseCacheHandle:
                 or self.num_actual_tokens > self.runtime.max_swap_rows
             )
         ):
-            assert self.block_table is not None
             indices = self.runtime.request_state_indices
             assert indices is not None
             self.batch_block_table = self.block_table.index_select(

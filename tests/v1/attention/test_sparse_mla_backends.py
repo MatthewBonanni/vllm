@@ -3935,7 +3935,9 @@ def test_hisparse_resident_prefill_uses_attention_block_stride(
         begin_forward=lambda: None,
         eager_host_mirror=True,
         max_swap_rows=max_swap_rows,
-        request_state_indices=torch.tensor([1, 0], device=DEVICE_TYPE),
+        request_state_indices=torch.tensor(
+            [1, 0], dtype=torch.int32, device=DEVICE_TYPE
+        ),
     )
     cache = HiSparseCacheHandle(runtime)
     cache.view = SimpleNamespace(block_size=64, attention_block_stride=832)
@@ -3954,7 +3956,7 @@ def test_hisparse_resident_prefill_uses_attention_block_stride(
         num_decode_tokens=num_decode_tokens,
         max_query_len=1 if num_decode_tokens == 2 else 2,
         num_reqs=2,
-        req_id_per_token=torch.tensor([0, 1], device=DEVICE_TYPE),
+        req_id_per_token=torch.tensor([0, 1], dtype=torch.int32, device=DEVICE_TYPE),
     )
     # The second step changes the residency so a stale table cannot pass.
     for block in (3, 5):
@@ -3997,8 +3999,8 @@ def test_hisparse_flashmla_reorders_full_speculative_window_as_decode():
 def test_hisparse_mixed_single_token_batch_is_not_decode_only():
     cache = SimpleNamespace(
         batch_block_table=None,
+        block_table=None,
         runtime=SimpleNamespace(
-            is_group_leader=False,
             begin_forward=lambda: None,
             eager_host_mirror=True,
         ),
