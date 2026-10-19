@@ -241,16 +241,12 @@ class HiSparseMLAIndexGroup(SparseMLAIndexGroup):
             # Non-resident prefills are staged before reaching this path.
             assert cache.all_context_pages_resident
             leader = self.cache(0)
-            assert leader.view is not None and leader.block_table is not None
-            block_table = leader.batch_block_table()
-            # The table is produced after logical_topk_ready was recorded.
-            if layer_index == 0:
-                self.side_stream.wait_stream(current_stream())
+            assert leader.view is not None and leader.batch_block_table is not None
             return self._convert_once(
                 layer_index,
                 logical_topk_indices,
                 req_id_per_token,
-                block_table,
+                leader.batch_block_table,
                 leader.view.block_size,
                 block_stride_rows=leader.view.attention_block_stride,
                 return_valid_counts=return_valid_counts,

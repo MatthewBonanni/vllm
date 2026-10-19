@@ -470,6 +470,7 @@ class HiSparseConnectorWorker:
             handle.num_actual_tokens = 0
             handle.num_decode_tokens = 0
             handle.req_id_per_token = None
+            handle.batch_block_table = None
 
     def prepare_forward(self, attn_metadata: Mapping[str, Any] | None) -> None:
         if attn_metadata is None:

@@ -3919,27 +3919,26 @@ def test_sparse_mqa_hisparse_lanes(
     )
 
 
-@pytest.mark.parametrize("max_swap_rows", [1, 4], ids=["over_capacity", "mixed"])
-def test_hisparse_resident_prefill_uses_attention_block_stride(max_swap_rows):
-    """Resident conversion waits for the batch table and uses the attention stride."""
+@pytest.mark.parametrize(
+    ("num_decode_tokens", "max_swap_rows"),
+    [(2, 1), (1, 4)],
+    ids=["over_capacity", "mixed"],
+)
+def test_hisparse_resident_prefill_uses_attention_block_stride(
+    num_decode_tokens, max_swap_rows
+):
+    """Resident conversion reads the step's batch table at the attention stride,
+    even when compute-stream work delays the layer after the topk is ready."""
     topk = torch.zeros((2, 128), dtype=torch.int32, device=DEVICE_TYPE)
-    blocks = torch.full((2, 1), 3, dtype=torch.int32, device=DEVICE_TYPE)
-    batch_table = torch.zeros_like(blocks)
-
-    def batch_block_table():
-        torch.cuda._sleep(200_000_000)
-        batch_table.copy_(blocks)
-        return batch_table
-
-    cache = SimpleNamespace(
-        all_context_pages_resident=True,
-        num_decode_tokens=1,
-        num_actual_tokens=2,
-        view=SimpleNamespace(block_size=64, attention_block_stride=832),
-        block_table=blocks,
-        batch_block_table=batch_block_table,
-        runtime=SimpleNamespace(max_swap_rows=max_swap_rows),
+    runtime = SimpleNamespace(
+        is_group_leader=True,
+        begin_forward=lambda: None,
+        eager_host_mirror=True,
+        max_swap_rows=max_swap_rows,
+        request_state_indices=torch.tensor([1, 0], device=DEVICE_TYPE),
     )
+    cache = HiSparseCacheHandle(runtime)
+    cache.view = SimpleNamespace(block_size=64, attention_block_stride=832)
     group = HiSparseMLAIndexGroup(
         logical_topk_indices=topk,
         physical_topk_indices=torch.empty_like(topk),
@@ -3950,16 +3949,29 @@ def test_hisparse_resident_prefill_uses_attention_block_stride(max_swap_rows):
         has_indexer=True,
         caches=[cache],
     )
-    metadata = SimpleNamespace(req_id_per_token=torch.zeros_like(topk[:, 0]))
-    # Repeat after compilation so its host delay cannot hide the stream race.
-    for _ in range(2):
-        batch_table.zero_()
+    metadata = SimpleNamespace(
+        num_actual_tokens=2,
+        num_decode_tokens=num_decode_tokens,
+        max_query_len=1 if num_decode_tokens == 2 else 2,
+        num_reqs=2,
+        req_id_per_token=torch.tensor([0, 1], device=DEVICE_TYPE),
+    )
+    # The second step changes the residency so a stale table cannot pass.
+    for block in (3, 5):
+        cache.block_table = torch.tensor(
+            [[block + 1], [block]], dtype=torch.int32, device=DEVICE_TYPE
+        )
+        cache.batch_block_table = None
         torch.accelerator.synchronize()
+        cache.prepare_group_for_batch(metadata)
         group.set_logical_topk_ready(0)
+        torch.cuda._sleep(200_000_000)
+        group.prepare_for_batch(0, metadata)
         physical = group.convert_logical_to_physical_topk(
             0, topk, metadata, block_stride_rows=None, return_valid_counts=False
         )
-        torch.testing.assert_close(physical, torch.full_like(topk, 3 * 832))
+        expected = torch.tensor([[block], [block + 1]], device=DEVICE_TYPE) * 832
+        torch.testing.assert_close(physical, expected.int().expand_as(topk))
 
 
 def test_hisparse_flashmla_reorders_full_speculative_window_as_decode():
@@ -3984,7 +3996,9 @@ def test_hisparse_flashmla_reorders_full_speculative_window_as_decode():
 
 def test_hisparse_mixed_single_token_batch_is_not_decode_only():
     cache = SimpleNamespace(
+        batch_block_table=None,
         runtime=SimpleNamespace(
+            is_group_leader=False,
             begin_forward=lambda: None,
             eager_host_mirror=True,
         ),
