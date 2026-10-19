@@ -3966,9 +3966,11 @@ def test_hisparse_resident_prefill_uses_attention_block_stride(
         cache.batch_block_table = None
         torch.accelerator.synchronize()
         cache.prepare_group_for_batch(metadata)
+        table = cache.batch_block_table
         group.set_logical_topk_ready(0)
         torch.cuda._sleep(200_000_000)
         group.prepare_for_batch(0, metadata)
+        assert cache.batch_block_table is table
         physical = group.convert_logical_to_physical_topk(
             0, topk, metadata, block_stride_rows=None, return_valid_counts=False
         )
