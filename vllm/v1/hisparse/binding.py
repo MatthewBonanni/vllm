@@ -68,9 +68,11 @@ def resolve_hisparse_specs(
             f"attention and indexer backend: {error}"
         ) from error
     resized_specs: dict[str, KVCacheSpec] = {
-        name: spec.copy_with_new_block_size(block_size)
-        if spec.cache_role is SparseCacheRole.SPARSE
-        else spec
+        name: spec.copy_with_new_block_size(
+            block_size
+            if spec.cache_role is SparseCacheRole.SPARSE
+            else 64 * spec.tokens_per_state
+        )
         for name, spec in mla_specs.items()
     }
     groups = get_hisparse_kv_cache_groups(vllm_config, resized_specs)
