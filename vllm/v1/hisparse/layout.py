@@ -157,8 +157,10 @@ def _lay_out_hisparse_groups(
 
     regular_groups = groups[1:]
     hot_group_page_limit = max(
-        sum(spec.page_size_bytes for spec in indexer_specs.values()),
-        *(_group_page_bytes(group) for group in regular_groups),
+        [
+            sum(spec.page_size_bytes for spec in indexer_specs.values()),
+            *(_group_page_bytes(group) for group in regular_groups),
+        ]
     )
     hot_blocks_per_request = cdiv(config.device_buffer_size, gpu_block_size)
     hot_units: list[list[tuple[str, MLAAttentionSpec]]] = []
