@@ -30,6 +30,7 @@ from vllm.v1.kv_cache_interface import (
     KVCacheLayout,
     KVCacheSpec,
     MLAAttentionSpec,
+    SparseCacheRole,
     UniformTypeKVCacheSpecs,
     create_kv_cache_views,
 )
@@ -68,6 +69,8 @@ def resolve_hisparse_specs(
         ) from error
     resized_specs: dict[str, KVCacheSpec] = {
         name: spec.copy_with_new_block_size(block_size)
+        if spec.cache_role is SparseCacheRole.SPARSE
+        else spec
         for name, spec in mla_specs.items()
     }
     groups = get_hisparse_kv_cache_groups(vllm_config, resized_specs)
