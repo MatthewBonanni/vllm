@@ -27,11 +27,14 @@ from vllm.distributed.kv_transfer.kv_connector.v1.hisparse.worker import (
 from vllm.model_executor.layers.mamba.mamba_mixer2 import MambaMixer2
 from vllm.utils.mem_constants import GiB_bytes
 from vllm.utils.mem_utils import MemorySnapshot
+from vllm.v1.attention.backends.mla.cpu_mla import CPUMLABackend
 from vllm.v1.core.kv_cache_utils import KVCacheBlockCopy
 from vllm.v1.hisparse.backend import CUDAHiSparseBackend, HiSparseBackend
 from vllm.v1.hisparse.runtime import HiSparseCacheHandle
 from vllm.v1.hisparse.types import SparseKVPageTransfer, SparseKVRowMirror
+from vllm.v1.kv_cache_interface import MLAAttentionSpec
 from vllm.v1.worker.utils import (
+    AttentionGroup,
     bind_kv_cache,
     bind_kv_cache_to_layers,
     copy_kv_cache_blocks_inplace,
@@ -1521,3 +1524,34 @@ def test_request_memory_charges_external_weights():
         request_memory(
             _memory_snapshot(total_gib=100, free_gib=10), cache_config, 70 * GiB_bytes
         )
+
+
+def test_kernel_blocks_of_packed_cache_with_unaligned_block_stride():
+    """Kernel blocks address packed blocks whose stride is no multiple of a page."""
+    spec = MLAAttentionSpec(
+        block_size=8,
+        num_kv_heads=1,
+        head_size=16,
+        dtype=torch.uint8,
+        tokens_per_state=2,
+    )
+    group = AttentionGroup(
+        CPUMLABackend,
+        ["cache"],
+        spec,
+        0,
+        kernel_block_size=4,
+        kernel_block_table=torch.zeros(1, 1, 4, dtype=torch.int32),
+        kernel_block_offsets=torch.arange(2, dtype=torch.int32),
+    )
+    num_blocks, block_stride = 5, 112
+    storage = torch.zeros(num_blocks * block_stride, dtype=torch.uint8)
+    manager_view = storage.as_strided((num_blocks, 1, 4, 16), (block_stride, 64, 16, 1))
+    for block in range(num_blocks):
+        manager_view[block] = torch.arange(64, dtype=torch.uint8).view(1, 4, 16) + block
+
+    kernel_view = group.map_kv_cache_to_kernel_blocks(manager_view)
+    kernel_blocks = group.map_to_kernel_block_table(torch.tensor([[3, 1]]))
+
+    expected = manager_view[[3, 1]].unflatten(2, (2, 2)).transpose(1, 2).flatten(0, 1)
+    torch.testing.assert_close(kernel_view[kernel_blocks[0].long()], expected)
