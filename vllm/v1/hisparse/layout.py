@@ -138,21 +138,10 @@ def _lay_out_hisparse_groups(
         gpu_block_size,
     )
     assert config is not None
-    indexer_group_spec = UniformTypeKVCacheSpecs.from_specs(
-        cast(dict[str, KVCacheSpec], indexer_specs)
-    )
-    assert indexer_group_spec is not None
-    indexer_group = KVCacheGroupSpec(
-        list(indexer_specs),
-        indexer_group_spec,
-        enable_kv_transfer=True,
-        role=KVCacheGroupRole.HISPARSE_INDEXER,
-    )
-
     hot_group_page_limit = max(
         [
             sum(spec.page_size_bytes for spec in indexer_specs.values()),
-            *(group_page_bytes(group) for group in regular_groups),
+            *(_group_page_bytes(group) for group in regular_groups),
         ]
     )
     hot_blocks_per_request = cdiv(config.device_buffer_size, gpu_block_size)
@@ -212,6 +201,27 @@ def _lay_out_hisparse_groups(
     if current:
         append_hot_group(current)
 
+    # Fill the block the other device groups need with whole indexer pages.
+    block_bytes = max(
+        _group_page_bytes(group)
+        for group in [*resident_groups, *hot_groups, *regular_groups]
+    )
+    indexer_page = sum(spec.page_size_bytes for spec in indexer_specs.values())
+    pages_per_block = max(block_bytes // indexer_page, 1)
+    indexer_group_spec = UniformTypeKVCacheSpecs.from_specs(
+        {
+            name: spec.copy_with_new_block_size(spec.block_size * pages_per_block)
+            for name, spec in indexer_specs.items()
+        }
+    )
+    assert indexer_group_spec is not None
+    indexer_group = KVCacheGroupSpec(
+        list(indexer_specs),
+        indexer_group_spec,
+        enable_kv_transfer=True,
+        role=KVCacheGroupRole.HISPARSE_INDEXER,
+    )
+
     source_group_spec = UniformTypeKVCacheSpecs.from_specs(
         cast(dict[str, KVCacheSpec], source_specs)
     )
@@ -232,7 +242,7 @@ def _lay_out_hisparse_groups(
     ]
 
 
-def group_page_bytes(group: KVCacheGroupSpec) -> int:
+def _group_page_bytes(group: KVCacheGroupSpec) -> int:
     spec = group.kv_cache_spec
     if isinstance(spec, UniformTypeKVCacheSpecs):
         return sum(s.page_size_bytes for s in spec.kv_cache_specs.values())

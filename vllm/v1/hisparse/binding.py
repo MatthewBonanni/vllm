@@ -14,7 +14,6 @@ from vllm.v1.hisparse.layout import (
     HISPARSE_HOT_SUFFIX,
     HISPARSE_RESIDENT_SUFFIX,
     get_hisparse_kv_cache_groups,
-    group_page_bytes,
 )
 from vllm.v1.hisparse.runtime import (
     HiSparseCacheHandle,
@@ -28,8 +27,6 @@ from vllm.v1.kv_cache_interface import (
     HiSparseHotSpec,
     HiSparseResidentSpec,
     KVCacheConfig,
-    KVCacheGroupRole,
-    KVCacheGroupSpec,
     KVCacheLayout,
     KVCacheSpec,
     MLAAttentionSpec,
@@ -81,25 +78,14 @@ def resolve_hisparse_specs(
         [attn_layers[name].get_attn_backend() for name in indexer_names],
         [mla_specs[name] for name in indexer_names],
     )
-
-    def resize(indexer_block_size: int) -> dict[str, KVCacheSpec]:
-        return {
-            name: spec.copy_with_new_block_size(
-                indexer_block_size if name in indexer_names else block_size
-            )
-            for name, spec in mla_specs.items()
-        }
-
-    resized_specs = resize(indexer_block_size)
-    groups = get_hisparse_kv_cache_groups(vllm_config, kv_cache_spec | resized_specs)
-    assert groups is not None
-    pages_per_block = _indexer_pages_per_block(groups)
-    if pages_per_block > 1:
-        resized_specs = resize(indexer_block_size * pages_per_block)
-        groups = get_hisparse_kv_cache_groups(
-            vllm_config, kv_cache_spec | resized_specs
+    resized_specs: dict[str, KVCacheSpec] = {
+        name: spec.copy_with_new_block_size(
+            indexer_block_size if name in indexer_names else block_size
         )
-        assert groups is not None
+        for name, spec in mla_specs.items()
+    }
+    groups = get_hisparse_kv_cache_groups(vllm_config, resized_specs)
+    assert groups is not None
     return (
         kv_cache_spec
         | resized_specs
@@ -110,20 +96,6 @@ def resolve_hisparse_specs(
             for layer_name in group.layer_names
         }
     )
-
-
-def _indexer_pages_per_block(groups: list[KVCacheGroupSpec]) -> int:
-    """Indexer pages that fit in the block the other device groups need."""
-    device_groups = [group for group in groups if not group.host_resident]
-    (indexer_group,) = [
-        group
-        for group in device_groups
-        if group.role is KVCacheGroupRole.HISPARSE_INDEXER
-    ]
-    block_bytes = max(
-        group_page_bytes(group) for group in device_groups if group is not indexer_group
-    )
-    return max(block_bytes // group_page_bytes(indexer_group), 1)
 
 
 def _largest_exact_kernel_block_size(
