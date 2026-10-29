@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from vllm.config import VllmConfig
@@ -34,6 +34,7 @@ logger = init_logger(__name__)
 
 HISPARSE_HOT_SUFFIX = ".hisparse_hot"
 HISPARSE_RESIDENT_SUFFIX = ".hisparse_resident"
+_KERNEL_PAGE_ALIGNMENT = 16
 
 
 @dataclass(frozen=True)
@@ -210,7 +211,10 @@ def _lay_out_hisparse_groups(
     pages_per_block = max(block_bytes // indexer_page, 1)
     indexer_group_spec = UniformTypeKVCacheSpecs.from_specs(
         {
-            name: spec.copy_with_new_block_size(spec.block_size * pages_per_block)
+            name: replace(
+                spec.copy_with_new_block_size(spec.block_size * pages_per_block),
+                block_stride_alignment=_KERNEL_PAGE_ALIGNMENT,
+            )
             for name, spec in indexer_specs.items()
         }
     )

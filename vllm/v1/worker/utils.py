@@ -404,10 +404,12 @@ class AttentionGroup:
         # Token and pooled caches are written through manager-block slot
         # mappings, so only compressed caches (written from their block table)
         # can be mapped.
+        page_size = kernel_rows * kv_cache.stride(-2)
+        page_stride = math.gcd(kv_cache.stride(0), page_size)
         if (
             spec.tokens_per_state <= 1
             or kv_cache.shape[1] != 1
-            or kv_cache.stride(0) % (kernel_rows * kv_cache.stride(-2))
+            or page_stride * kv_cache.element_size() % 16
         ):
             raise ValueError(
                 f"{self.backend.get_name()} needs {self.kernel_block_size}-token "
@@ -416,13 +418,19 @@ class AttentionGroup:
                 f"{self.kernel_block_size} or set VLLM_KV_CACHE_LAYOUT to a "
                 "layer-compact layout (e.g. LBNHC)."
             )
-        # Kernel block j of block b is b * kernel_block_stride + j. The view
-        # spans the other layers' pages between blocks (never addressing them),
-        # which ``view`` cannot express.
-        page_stride = kernel_rows * kv_cache.stride(-2)
+        # Kernel block j of block b is b * kernel_block_stride + j * page_step,
+        # in units of the largest stride dividing both the block and page
+        # strides. The view spans the other layers' pages between blocks
+        # (never addressing them), which ``view`` cannot express.
+        page_step = page_size // page_stride
         self.kernel_block_stride = kv_cache.stride(0) // page_stride
+        pages_per_block = kv_cache.shape[-2] // kernel_rows
+        if self.kernel_block_offsets is not None:
+            self.kernel_block_offsets.copy_(
+                torch.arange(pages_per_block, dtype=torch.int32) * page_step
+            )
         num_pages = (kv_cache.shape[0] - 1) * self.kernel_block_stride + (
-            kv_cache.shape[-2] // kernel_rows
+            (pages_per_block - 1) * page_step + 1
         )
         return kv_cache.as_strided(
             (num_pages, *kv_cache.shape[1:-2], kernel_rows, kv_cache.shape[-1]),
