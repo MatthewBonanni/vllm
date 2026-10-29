@@ -152,7 +152,7 @@ def _lay_out_hisparse_groups(
     hot_group_page_limit = max(
         [
             sum(spec.page_size_bytes for spec in indexer_specs.values()),
-            *(_group_page_bytes(group) for group in regular_groups),
+            *(group_page_bytes(group) for group in regular_groups),
         ]
     )
     hot_blocks_per_request = cdiv(config.device_buffer_size, gpu_block_size)
@@ -232,7 +232,7 @@ def _lay_out_hisparse_groups(
     ]
 
 
-def _group_page_bytes(group: KVCacheGroupSpec) -> int:
+def group_page_bytes(group: KVCacheGroupSpec) -> int:
     spec = group.kv_cache_spec
     if isinstance(spec, UniformTypeKVCacheSpecs):
         return sum(s.page_size_bytes for s in spec.kv_cache_specs.values())
