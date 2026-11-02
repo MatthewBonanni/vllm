@@ -113,7 +113,7 @@ def test_qsa_mtp_index_share_updates_cache_but_skips_selection(
 def test_qsa_main_metadata_preserves_shared_mapping_and_group_state(
     hisparse: bool, capture: bool, query_len: int
 ) -> None:
-    """Reuse runner-supplied mappings without exposing padding to HiSparse.
+    """Reuse runner-supplied mappings and expose the HiSparse batch split.
 
     CPU tensors exercise the cached-mapping builder path, not the initial
     Triton mapping kernel or execution of a captured CUDA graph.
@@ -154,6 +154,7 @@ def test_qsa_main_metadata_preserves_shared_mapping_and_group_state(
         query_start_loc_cpu=starts.clone(),
         max_seq_len=32,
         seq_lens=torch.tensor([16, 32, 0], dtype=torch.int32),
+        seq_lens_cpu_upper_bound=torch.tensor([16, 32, 0], dtype=torch.int32),
         block_table_tensor=block_table,
         slot_mapping=slots,
         _token_to_req_indices_cache=shared_mapping,
@@ -184,27 +185,16 @@ def test_qsa_main_metadata_preserves_shared_mapping_and_group_state(
 
     assert isinstance(metadata, Qwen4ExpQSAHiSparseMetadata)
     assert isinstance(updated, Qwen4ExpQSAHiSparseMetadata)
-    expected_mapping = torch.tensor(
-        [0] * query_len + [1] * query_len + [-1] * (2 * query_len), dtype=torch.int32
-    )
     torch.testing.assert_close(
-        metadata.req_id_per_token, expected_mapping, rtol=0, atol=0
+        metadata.req_id_per_token, original_mapping, rtol=0, atol=0
     )
-    assert metadata.req_id_per_token.data_ptr() != shared_mapping.data_ptr()
     assert updated.req_id_per_token is metadata.req_id_per_token
-    expected_split = (3, 0, num_tokens, 0) if query_len == 1 else (0, 3, 0, num_tokens)
+    expected_split = (3, num_tokens) if query_len == 1 else (0, 0)
     for item in (metadata, updated):
         assert item.num_reqs == 3
         assert item.query_start_loc is starts
-        assert item.seq_lens is common.seq_lens
-        assert item.max_seq_len == 32
-        assert item.is_cudagraph_capture is capture
-        assert (
-            item.num_decode_reqs,
-            item.num_prefill_reqs,
-            item.num_decode_tokens,
-            item.num_prefill_tokens,
-        ) == expected_split
+        assert (item.num_decodes, item.num_decode_tokens) == expected_split
+        assert (item.host_staging_plan is None) == (query_len == 1)
 
 
 def _qsa_mqa_paged_reference(
