@@ -1683,6 +1683,7 @@ def _run_qsa_hisparse_prefill_case(
         query_start_loc_cpu=torch.tensor([0, 2, 4], dtype=torch.int32),
         max_seq_len=33,
         seq_lens=torch.tensor([17, 33], device="cuda", dtype=torch.int32),
+        seq_lens_cpu_upper_bound=torch.tensor([17, 33], dtype=torch.int32),
         block_table_tensor=source_table[:2],
         slot_mapping=slots,
     )
@@ -1899,6 +1900,9 @@ def _run_qsa_hisparse_prefill_case(
                     max_seq_len=start + length,
                     seq_lens=torch.tensor(
                         [start + length], device="cuda", dtype=torch.int32
+                    ),
+                    seq_lens_cpu_upper_bound=torch.tensor(
+                        [start + length], dtype=torch.int32
                     ),
                     block_table_tensor=source_table[:1],
                     slot_mapping=warm_slots,
@@ -2186,8 +2190,7 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
             if capture
             else builder.build(0, common)
         )
-        assert metadata.num_decode_tokens == 0
-        assert metadata.num_prefill_tokens == tokens
+        assert metadata.num_decode_tokens == tokens
         all_metadata[owner.layer_name] = metadata
         for side, side_builder, table in zip(
             (owner.indexer.raw_key_cache, owner.indexer.compressed_key_cache),
@@ -2720,6 +2723,8 @@ def _run_qsa_hisparse_worker_case(
                 2 * owner.q_size + owner.kv_size + columns, columns
             ] = layer + 1
             owner.o_proj.weight[torch.arange(256, device=device), output_columns] = 1
+        # The hooks below observe the unfused selection and K/V writer.
+        owner.use_fused_qsa_prepare = False
         owner.process_weights_after_loading(torch.bfloat16)
         for side_cache in (
             owner.indexer.raw_key_cache,
@@ -3191,6 +3196,9 @@ def _run_qsa_hisparse_worker_case(
                         query_start_loc_cpu=torch.tensor([0, 2, 2], dtype=torch.int32),
                         max_seq_len=71,
                         seq_lens=seq_lens,
+                        seq_lens_cpu_upper_bound=torch.tensor(
+                            [71, 0], dtype=torch.int32
+                        ),
                         block_table_tensor=source_table,
                         slot_mapping=host_slots,
                     )
