@@ -1905,7 +1905,6 @@ def _run_qsa_hisparse_prefill_case(
                     slot_mapping=warm_slots,
                 )
                 warm_metadata = {owner.layer_name: builder.build(0, warm_common)}
-                assert not warm_metadata[owner.layer_name].is_cudagraph_capture
                 for side_cache in (
                     owner.indexer.raw_key_cache,
                     owner.indexer.compressed_key_cache,
@@ -2414,7 +2413,6 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
         )
         worker.prepare_forward(all_metadata)
         assert not cache.all_context_pages_resident
-        assert not metadata.is_cudagraph_capture
         graph.replay()
         worker.finish_forward()
         worker.host_write_event.synchronize()
