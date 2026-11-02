@@ -62,7 +62,6 @@ from vllm.v1.kv_cache_interface import (
     SparseFullAttentionSpec,
     get_kv_quant_mode,
 )
-from vllm.v1.kv_cache_layout import KVCacheLayout
 
 from ..common.qsa import Qwen4ExpQSAMetadata
 from ..common.qsa import Qwen4ExpQSAMetadataBuilder as BaseQSAMetadataBuilder
@@ -256,14 +255,6 @@ class Qwen4ExpQSABackend(AttentionBackend):
     @classmethod
     def supports_kv_connector(cls) -> bool:
         return False
-
-    @classmethod
-    def supported_kv_cache_layouts(cls) -> tuple[KVCacheLayout, ...] | None:
-        # HiSparse copies each token's K/V for every local head as one row.
-        config = get_current_vllm_config_or_none()
-        if config is not None and config.attention_config.hisparse_config is not None:
-            return (KVCacheLayout.BLNHC,)
-        return None
 
 
 class Qwen4ExpQSAImpl(AttentionImplBase[Qwen4ExpQSAMetadata]):
