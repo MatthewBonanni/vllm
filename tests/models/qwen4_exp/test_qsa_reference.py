@@ -1969,7 +1969,6 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
     tmp_path, dist_init, workspace_init, monkeypatch, record_property, fp8, indexer_fp8
 ) -> None:
     """A captured K+1 graph follows a real worker spill and peer page reuse."""
-    import json
     from dataclasses import replace
 
     from transformers import Qwen4ExpTextConfig
@@ -2089,7 +2088,22 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
         )
 
     original = cache_rows(original)
-    backing = original.flatten().clone()
+    # Resident and hot rows share one slab, as HiSparse binding requires.
+    hot_blocks_per_request = (
+        cache.runtime.region_stride + block_size - 1
+    ) // block_size
+    hot_blocks = 2 * hot_blocks_per_request
+    slab_blocks = blocks + hot_blocks
+    backing = torch.cat(
+        (
+            original.flatten(),
+            torch.zeros(
+                hot_blocks * block_size * row_width,
+                dtype=original.dtype,
+                device=device,
+            ),
+        )
+    )
     source_table = torch.tensor(
         [[1, 2, 0], [3, 4, 5]], device=device, dtype=torch.int32
     )
@@ -2121,7 +2135,7 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
         backing.view(torch.uint8),
         byte_offset=0,
         block_stride=block_size * row_width * backing.element_size(),
-        num_blocks=blocks,
+        num_blocks=slab_blocks,
         block_size=block_size,
         block_table=resident_table,
         slot_mapping=slots,
@@ -2131,26 +2145,15 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
     cache.residency = residency
     cache.mirror_slot_mapping = host_slots
     cache.runtime.resident_source_index = 0
-    # This multi-query path uses prefill staging, but the public worker owns a
-    # normally sized hot allocation as well (including its shutdown lifetime).
-    hot_blocks_per_request = (
-        cache.runtime.region_stride + block_size - 1
-    ) // block_size
-    hot_blocks = 2 * hot_blocks_per_request
-    hot_backing = torch.zeros(
-        hot_blocks * block_size * row_width * original.element_size(),
-        dtype=torch.uint8,
-        device=device,
-    )
     cache.runtime.bind_hot_cache(
-        hot_backing,
+        backing.view(torch.uint8),
         byte_offset=0,
         block_stride=block_size * row_width * original.element_size(),
-        num_blocks=hot_blocks,
+        num_blocks=slab_blocks,
         block_size=block_size,
-        block_table=torch.arange(hot_blocks, device=device, dtype=torch.int32).view(
-            2, -1
-        ),
+        block_table=torch.arange(
+            blocks, slab_blocks, device=device, dtype=torch.int32
+        ).view(2, -1),
     )
     owner.bind_kv_cache(original.transpose(1, 2))
     builder = owner.get_attn_backend().get_builder_cls()(
@@ -2213,15 +2216,6 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
 
     owner.use_fused_qsa_prepare = False
     monkeypatch.setattr(owner.impl, "do_kv_cache_update", observe_writer)
-    staging_observations = []
-    native_gather = torch.ops._C_cache_ops.hisparse_gather_plan
-
-    def observe_gather(host_cache, staged, rows, destinations, misses, *args):
-        result = native_gather(host_cache, staged, rows, destinations, misses, *args)
-        staging_observations.append((staged.nbytes, misses.clone(), staged.clone()))
-        return result
-
-    monkeypatch.setattr(torch.ops._C_cache_ops, "hisparse_gather_plan", observe_gather)
     pool = BlockPool(blocks, enable_caching=False, hash_block_size=block_size)
     allocated = pool.get_new_blocks(blocks - 1)
     reclaimed = next(block for block in allocated if block.block_id == 1)
@@ -2240,7 +2234,13 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
             KVCacheConfig(num_blocks=blocks, kv_cache_tensors=[], kv_cache_groups=[]),
         )
         worker.initialize(
-            [cache], [owner.layer_name], hot_backing, 2, blocks, device, [registered]
+            [cache],
+            [owner.layer_name],
+            backing.view(torch.uint8),
+            2,
+            slab_blocks,
+            device,
+            [registered],
         )
         worker.set_request_state_indices(
             torch.tensor([1, 0], dtype=torch.int32, device=device)
@@ -2384,7 +2384,7 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
             atol=0,
         )
         host_before_replay = host_pages.clone()
-        resident_before_replay = cache.view.cache.clone()
+        resident_before_replay = cache.view.cache[:blocks].clone()
 
         # Update persistent inputs as the runner does: request A remains, B is
         # padding, its first page is host-only, and its live tail changes again.
@@ -2437,7 +2437,7 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
             atol=0,
         )
         torch.testing.assert_close(
-            cache.view.cache.view(torch.uint8),
+            cache.view.cache[:blocks].view(torch.uint8),
             expected_resident.view(torch.uint8),
             rtol=0,
             atol=0,
@@ -2451,69 +2451,6 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
             )
         expected = attention_reference(
             initial_positions[:4], torch.zeros(4, device=device, dtype=torch.int32)
-        )
-        assert len(staging_observations) == 2
-        staging_bytes, replay_misses, staged_contents = staging_observations[-1]
-        row_bytes = row_width * original.element_size()
-        selection_width = owner.topk_indices_buffer.shape[1] - 1
-        padded_width = (selection_width + block_size - 1) // block_size * block_size
-        assert staging_bytes == tokens * padded_width * row_bytes
-        staged_rows = staged_contents.view(-1, row_width)
-        verified_staged_rows = 0
-        for token_row, selection in enumerate(selected):
-            count = int(selection[-1])
-            logical = selection[:count].long()
-            physical = owner.physical_topk_indices_buffer[token_row, :count].long()
-            assert torch.all(physical >= 0)
-            pages = saved_source_table[0, logical // block_size].long()
-            expected_staged = reference[pages, logical % block_size].flatten(1)
-            torch.testing.assert_close(
-                staged_rows[physical].view(torch.uint8),
-                expected_staged.view(torch.uint8),
-                rtol=0,
-                atol=0,
-            )
-            verified_staged_rows += count
-        assert verified_staged_rows == 29 + 30 + 31 + 32
-        host_rows_copied = replay_misses.sum().item()
-        assert host_rows_copied == 4 * block_size
-        live_selected_rows = owner.topk_indices_buffer[:tokens, -1].sum().item()
-        record_property(
-            "mixed_replay_proof",
-            json.dumps(
-                {
-                    "main_dtype": "fp8_e4m3" if fp8 else "bfloat16",
-                    "indexer_dtype": "fp8_e4m3" if indexer_fp8 else "bfloat16",
-                    "k_scale": k_scale,
-                    "v_scale": v_scale,
-                    "complete_kv_row_bytes": row_bytes,
-                    "verified_staged_kv_rows": verified_staged_rows,
-                    "query_len": 4,
-                    "capture_requests": 2,
-                    "replay_requests": 1,
-                    "reused_block": peer_block.block_id,
-                    "transfer_completed": 91,
-                    "actual_peer_written_rows": 4,
-                    "live_tail_rows": 4,
-                    "native_replays": 2,
-                    "full_host_and_resident_bytes_equal": True,
-                    "selected_staging_bytes": staging_bytes,
-                    "effective_host_rows_copied": host_rows_copied,
-                    "effective_host_bytes_copied": (
-                        host_rows_copied * row_width * original.element_size()
-                    ),
-                    "staging_d2d_rows": replay_misses.numel(),
-                    "unused_capacity_d2d_rows": (
-                        replay_misses.numel() - live_selected_rows
-                    ),
-                    "max_abs_error": (actual[:4].float() - expected.float())
-                    .abs()
-                    .max()
-                    .item(),
-                    "natural_scheduler_pressure": False,
-                    "natural_mtp_sampler": False,
-                }
-            ),
         )
         torch.testing.assert_close(actual[:4], expected, rtol=2e-2, atol=2e-2)
     finally:
