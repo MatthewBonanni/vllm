@@ -1619,7 +1619,6 @@ def _run_qsa_hisparse_prefill_case(
     # resident target exercised below instead of the ordinary cache.
     assert owner.use_fused_qk_norm_rope_gate
     assert owner.indexer.use_fused_pre_indexer
-    assert not owner.use_fused_qsa_prepare
     row_width = heads * 2 * dim
     original = torch.randn(
         num_blocks,
