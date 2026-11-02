@@ -80,6 +80,7 @@ class Qwen4ExpQSAHiSparseMetadata(Qwen4ExpQSAMetadata):
     req_id_per_token: torch.Tensor
     query_start_loc: torch.Tensor
     host_staging_plan: HiSparsePrefillStagingPlan | None
+    is_cudagraph_capture: bool = False
 
 
 class Qwen4ExpQSAQKVIndexerLinear(MergedColumnParallelLinear):
@@ -204,6 +205,14 @@ class Qwen4ExpQSAMetadataBuilder(BaseQSAMetadataBuilder):
             query_start_loc=common_attn_metadata.query_start_loc,
             host_staging_plan=staging_plan,
         )
+
+    def build_for_cudagraph_capture(
+        self, common_attn_metadata: CommonAttentionMetadata
+    ) -> Qwen4ExpQSAMetadata:
+        metadata = super().build_for_cudagraph_capture(common_attn_metadata)
+        if isinstance(metadata, Qwen4ExpQSAHiSparseMetadata):
+            metadata.is_cudagraph_capture = True
+        return metadata
 
 
 class Qwen4ExpQSABackend(AttentionBackend):
@@ -786,13 +795,17 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
         else:
             query, output_gate = main_outputs
         if cache is not None:
-            cache.finish_kv_update()
+            hisparse_metadata = cast(Qwen4ExpQSAHiSparseMetadata, main_metadata)
+            # FULL warmup and capture run in mode NONE without a connector
+            # step; replay mirrors real rows when the worker finishes.
+            if not hisparse_metadata.is_cudagraph_capture:
+                cache.finish_kv_update()
             assert query is not None and output_gate is not None
             self._forward_hisparse(
                 query,
                 output,
                 output_gate,
-                cast(Qwen4ExpQSAHiSparseMetadata, main_metadata),
+                hisparse_metadata,
             )
             return
         assert query is not None and output_gate is not None

@@ -2211,6 +2211,7 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
         written.append(torch.cat((key, value), dim=-1).clone())
         return original_writer(layer, key, value, kv_cache, slot_mapping)
 
+    owner.use_fused_qsa_prepare = False
     monkeypatch.setattr(owner.impl, "do_kv_cache_update", observe_writer)
     staging_observations = []
     native_gather = torch.ops._C_cache_ops.hisparse_gather_plan
@@ -2396,7 +2397,7 @@ def test_qsa_hisparse_full_graph_verify_reads_reclaimed_history(
         slots[4:].fill_(-1)
         host_slots.copy_(slots)
         hidden.copy_(original_hidden * 2)
-        metadata = build_metadata(active=1)
+        build_metadata(active=1)
         assert pointers == (
             source_table.data_ptr(),
             resident_table.data_ptr(),
