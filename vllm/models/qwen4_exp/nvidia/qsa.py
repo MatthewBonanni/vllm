@@ -160,8 +160,6 @@ class Qwen4ExpQSAQKVIndexerLinear(MergedColumnParallelLinear):
 
 
 class Qwen4ExpCUDAQSAMetadataBuilder(Qwen4ExpQSAMetadataBuilder):
-    """With HiSparse, order decodes first and add the batch fields it reads."""
-
     def __init__(
         self,
         kv_cache_spec: AttentionSpec,
