@@ -159,8 +159,8 @@ class Qwen4ExpQSAQKVIndexerLinear(MergedColumnParallelLinear):
         return super().load_weights(remap_shards())
 
 
-class Qwen4ExpQSAHiSparseMetadataBuilder(Qwen4ExpQSAMetadataBuilder):
-    """Order decodes first and add the batch fields HiSparse reads."""
+class Qwen4ExpCUDAQSAMetadataBuilder(Qwen4ExpQSAMetadataBuilder):
+    """With HiSparse, order decodes first and add the batch fields it reads."""
 
     def __init__(
         self,
@@ -170,20 +170,24 @@ class Qwen4ExpQSAHiSparseMetadataBuilder(Qwen4ExpQSAMetadataBuilder):
         device: torch.device,
     ) -> None:
         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
-        self._init_reorder_batch_threshold(1, supports_spec_as_decode=True)
-        self.token_to_req_buffer = torch.empty(
-            vllm_config.scheduler_config.max_num_batched_tokens,
-            dtype=torch.int32,
-            device=device,
-        )
+        self.hisparse = vllm_config.attention_config.hisparse_config is not None
+        if self.hisparse:
+            self._init_reorder_batch_threshold(1, supports_spec_as_decode=True)
+            self.token_to_req_buffer = torch.empty(
+                vllm_config.scheduler_config.max_num_batched_tokens,
+                dtype=torch.int32,
+                device=device,
+            )
 
     def build(
         self,
         common_prefix_len: int,
         common_attn_metadata: CommonAttentionMetadata,
         fast_build: bool = False,
-    ) -> Qwen4ExpQSAHiSparseMetadata:
+    ) -> Qwen4ExpQSAMetadata:
         metadata = super().build(common_prefix_len, common_attn_metadata, fast_build)
+        if not self.hisparse:
+            return metadata
         num_decodes, num_prefills, num_decode_tokens, _ = split_decodes_and_prefills(
             common_attn_metadata, decode_threshold=self.reorder_batch_threshold or 1
         )
@@ -247,8 +251,8 @@ class Qwen4ExpQSABackend(AttentionBackend):
         return Qwen4ExpQSAImpl
 
     @staticmethod
-    def get_builder_cls() -> type[Qwen4ExpQSAMetadataBuilder]:
-        return Qwen4ExpQSAMetadataBuilder
+    def get_builder_cls() -> type[Qwen4ExpCUDAQSAMetadataBuilder]:
+        return Qwen4ExpCUDAQSAMetadataBuilder
 
     @classmethod
     def is_sparse(cls) -> bool:
@@ -257,12 +261,6 @@ class Qwen4ExpQSABackend(AttentionBackend):
     @classmethod
     def supports_kv_connector(cls) -> bool:
         return False
-
-
-class Qwen4ExpQSAHiSparseBackend(Qwen4ExpQSABackend):
-    @staticmethod
-    def get_builder_cls() -> type[Qwen4ExpQSAHiSparseMetadataBuilder]:
-        return Qwen4ExpQSAHiSparseMetadataBuilder
 
 
 class Qwen4ExpQSAImpl(AttentionImplBase[Qwen4ExpQSAMetadata]):
@@ -622,9 +620,7 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
             index_group = group
         self.index_group = index_group
         self.hisparse_cache = index_group.cache(0) if index_group else None
-        self.attn_backend = (
-            Qwen4ExpQSAHiSparseBackend if index_group else Qwen4ExpQSABackend
-        )
+        self.attn_backend = Qwen4ExpQSABackend
         self.impl: Qwen4ExpQSAImpl = Qwen4ExpQSAImpl(  # type: ignore[assignment]
             self.num_heads,
             self.head_dim,
