@@ -153,6 +153,21 @@ class KVTransferConfig:
     def get_from_extra_config(self, key, default) -> Any:
         return self.kv_connector_extra_config.get(key, default)
 
+    def add_connector(self, connector: dict[str, Any]) -> None:
+        """Append ``connector``, wrapping a single connector in MultiConnector."""
+        if self.kv_connector != "MultiConnector":
+            self.kv_connector_extra_config = {
+                "connectors": [
+                    {
+                        "kv_connector": self.kv_connector,
+                        "kv_role": self.kv_role,
+                        "kv_connector_extra_config": self.kv_connector_extra_config,
+                    }
+                ]
+            }
+            self.kv_connector = "MultiConnector"
+        self.kv_connector_extra_config.setdefault("connectors", []).append(connector)
+
     def has_connector(self, connector_name: str) -> bool:
         """Whether ``connector_name`` is configured, directly or in MultiConnector."""
         if self.kv_connector == connector_name:

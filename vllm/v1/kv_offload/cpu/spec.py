@@ -6,7 +6,7 @@ import torch
 from typing_extensions import override
 
 from vllm.platforms import current_platform
-from vllm.utils.math_utils import round_up
+from vllm.utils.math_utils import cdiv, round_up
 from vllm.v1.kv_offload.base import (
     CanonicalKVCaches,
     OffloadingCounterMetadata,
@@ -95,7 +95,7 @@ class CPUOffloadingSpec(OffloadingSpec):
         super().__init__(config)
 
         cpu_bytes_to_use = self.extra_config.get("cpu_bytes_to_use")
-        if not cpu_bytes_to_use:
+        if not cpu_bytes_to_use and config.default_num_blocks is None:
             raise Exception(
                 "cpu_bytes_to_use must be specified in kv_connector_extra_config"
             )
@@ -117,7 +117,11 @@ class CPUOffloadingSpec(OffloadingSpec):
             aligned_kv_bytes_per_chunk = round_up(
                 kv_bytes_per_chunk, self.BLOCK_SIZE_ALIGNMENT
             )
-            self.num_chunks = int(cpu_bytes_to_use) // aligned_kv_bytes_per_chunk
+            if cpu_bytes_to_use:
+                self.num_chunks = int(cpu_bytes_to_use) // aligned_kv_bytes_per_chunk
+            else:
+                assert config.default_num_blocks is not None
+                self.num_chunks = cdiv(config.default_num_blocks, self.blocks_per_chunk)
 
             # Expose aligned_kv_bytes_per_chunk as
             # kv_bytes_per_chunk. Note that this might contain

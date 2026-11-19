@@ -34,6 +34,7 @@ from vllm.v1.kv_cache_interface import (
     UniformTypeKVCacheSpecs,
 )
 from vllm.v1.kv_cache_spec_registry import KVCacheSpecRegistry
+from vllm.v1.kv_offload.cpu.spec import CPUOffloadingSpec
 from vllm.v1.kv_offload.file_mapper import FileMapper
 from vllm.v1.kv_offload.tiering.spec import TieringOffloadingSpec
 
@@ -401,6 +402,26 @@ def test_hisparse_offloads_only_indexer_group():
         (group.group_id, group.layer_names) for group in offloading_config.groups
     ] == [(1, ("indexer",))]
     assert [group.group_idx for group in scheduler_config.kv_group_configs] == [1]
+
+
+def test_hisparse_indexer_tier_defaults_to_host_pool_size():
+    kv_cache_config = KVCacheConfig(
+        num_blocks=4,
+        kv_cache_tensors=[],
+        kv_cache_groups=[
+            KVCacheGroupSpec(["source"], _full_attention_spec(), host_resident=True),
+            KVCacheGroupSpec(
+                ["indexer"],
+                _full_attention_spec(),
+                role=KVCacheGroupRole.HISPARSE_INDEXER,
+            ),
+        ],
+        hisparse_host_num_blocks=37,
+    )
+    offloading_config = build_offloading_config(
+        _make_vllm_config(extra_config={}), kv_cache_config
+    )
+    assert CPUOffloadingSpec(offloading_config).num_chunks == 37
 
 
 def test_hisparse_partial_group_size_survives_scheduler_flattening():

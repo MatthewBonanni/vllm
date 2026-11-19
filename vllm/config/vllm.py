@@ -1080,6 +1080,35 @@ class VllmConfig:
         )
         self.compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
 
+    def _configure_hisparse_indexer_offload(self) -> None:
+        kv_transfer_config = self.kv_transfer_config
+        hisparse_config = self.attention_config.hisparse_config
+        assert hisparse_config is not None
+        if (
+            kv_transfer_config is None
+            or not self.cache_config.enable_prefix_caching
+            or kv_transfer_config.has_connector("OffloadingConnector")
+            or kv_transfer_config.has_connector("MooncakeStoreConnector")
+        ):
+            return
+        if not hisparse_config.offload_indexer:
+            logger.warning(
+                "HiSparse is running with prefix caching but without indexer "
+                "offloading. A prefix hit needs both its host pages and its "
+                "indexer KV, and the indexer is kept only on GPU, so cached "
+                "prefixes are lost long before the host pool fills. Remove "
+                "offload_indexer=False or add an OffloadingConnector."
+            )
+            return
+        kv_transfer_config.add_connector(
+            {"kv_connector": "OffloadingConnector", "kv_role": "kv_both"}
+        )
+        logger.info(
+            "HiSparse: added an OffloadingConnector for the indexer cache "
+            "group so prefix hits survive GPU eviction. Set "
+            "hisparse_config.offload_indexer=False to disable."
+        )
+
     def _maybe_disable_dynamic_sd_for_data_parallel(self) -> None:
         speculative_config = self.speculative_config
         if (
@@ -1832,6 +1861,7 @@ class VllmConfig:
                 raise ValueError(
                     "HiSparse is only supported for DSA models with index_topk."
                 )
+            self._configure_hisparse_indexer_offload()
             if self.kv_transfer_config is not None and (
                 self.kv_transfer_config.kv_connector
                 not in (

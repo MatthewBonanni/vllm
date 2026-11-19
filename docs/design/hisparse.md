@@ -152,9 +152,19 @@ fused decode resolver described above.
 ## Indexer KV offloading
 
 HiSparse does not keep a private CPU copy of indexer KV. The indexer remains a
-normal prefix-cacheable GPU cache group. If `OffloadingConnector` is configured
-with HiSparse, it stores and restores that group through the generic KV
-offloading path; HiSparse continues to own only the sparse MLA host tier.
+normal prefix-cacheable GPU cache group. `OffloadingConnector` stores and
+restores that group through the generic KV offloading path; HiSparse continues
+to own only the sparse MLA host tier.
+
+Every prefix hit needs both its host pages and its indexer KV. Without an
+offload tier, a prefix is lost as soon as its indexer blocks are evicted from
+the GPU pool, which happens long before the host pool fills. So when prefix
+caching is enabled and neither `OffloadingConnector` nor
+`MooncakeStoreConnector` is configured, vLLM adds an `OffloadingConnector`,
+wrapping the configured connector in `MultiConnector` if needed. Unless
+`cpu_bytes_to_use` is set, its CPU tier holds the indexer for as many blocks as
+the HiSparse host pool. Setting `hisparse_config.offload_indexer` to `false`
+disables this and logs a warning.
 
 The two prefix sources can have different hit lengths. When the HiSparse host
 prefix extends beyond the GPU-resident indexer prefix, the scheduler asks

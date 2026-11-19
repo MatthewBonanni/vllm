@@ -53,6 +53,7 @@ def _make_offloading_config(
     data_parallel_rank_local: int | None = None,
     is_parallelism_agnostic: bool = False,
     replicated_layout: bool = False,
+    default_num_blocks: int | None = None,
     extra_config: dict[str, Any] | None = None,
 ) -> OffloadingConfig:
     normalized_extra_config = dict(extra_config or {})
@@ -88,6 +89,7 @@ def _make_offloading_config(
             is_parallelism_agnostic=is_parallelism_agnostic,
         ),
         replicated_layout=replicated_layout,
+        default_num_blocks=default_num_blocks,
     )
 
 
@@ -137,6 +139,32 @@ def test_create_cpu_offloading_spec():
     spec = _create_spec()
     assert isinstance(spec, CPUOffloadingSpec)
     assert spec.num_chunks > 0
+
+
+@pytest.mark.parametrize(
+    "blocks_per_chunk,num_chunks", [(1, 10), (4, 3)], ids=["block", "chunk"]
+)
+def test_cpu_spec_without_cpu_bytes_covers_default_num_blocks(
+    blocks_per_chunk, num_chunks
+):
+    """HiSparse sizes the indexer tier to the host pool, so no byte budget."""
+    spec = _create_spec(
+        cpu_bytes_to_use=None,
+        default_num_blocks=10,
+        blocks_per_chunk=blocks_per_chunk,
+    )
+    assert spec.num_chunks == num_chunks
+
+
+def test_cpu_spec_cpu_bytes_overrides_default_num_blocks():
+    alignment = CPUOffloadingSpec.BLOCK_SIZE_ALIGNMENT
+    spec = _create_spec(cpu_bytes_to_use=64 * alignment, default_num_blocks=10)
+    assert spec.num_chunks == 64
+
+
+def test_cpu_spec_requires_cpu_bytes_without_default_num_blocks():
+    with pytest.raises(Exception, match="cpu_bytes_to_use must be specified"):
+        _create_spec(cpu_bytes_to_use=None)
 
 
 def test_cpu_spec_sizes_normalized_worker_layout():
